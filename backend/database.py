@@ -15,8 +15,11 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 logger = logging.getLogger("petpooja.database")
 
-# Load .env from backend/ directory
-load_dotenv(Path(__file__).parent / ".env")
+# Load .env — try backend/ dir first, then project root
+_backend_dir = Path(__file__).parent
+_project_root = _backend_dir.parent
+load_dotenv(_backend_dir / ".env")
+load_dotenv(_project_root / ".env")  # fallback to project root .env
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
