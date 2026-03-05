@@ -35,7 +35,9 @@ _WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 # ── Confidence threshold ──
 # Below this, the system flags the transcript as low-confidence
 # and asks the user to repeat rather than guessing wrong.
-MIN_CONFIDENCE = float(os.getenv("STT_MIN_CONFIDENCE", "0.45"))
+# NOTE: Accented Hindi/Hinglish speech typically scores 0.2-0.5 even when
+# perfectly transcribed. Default lowered to 0.15 to avoid false rejections.
+MIN_CONFIDENCE = float(os.getenv("STT_MIN_CONFIDENCE", "0.15"))
 
 
 def _find_ffmpeg() -> str:
@@ -192,7 +194,7 @@ def transcribe(audio_path: str) -> dict:
 
         if not vad_info["has_speech"]:
             # No speech detected — return early with explicit flag
-            _cleanup(wav_path, audio_path)
+            _cleanup(wav_path)
             return {
                 "transcript": "",
                 "detected_language": "unknown",
@@ -241,10 +243,10 @@ def transcribe(audio_path: str) -> dict:
             overall_confidence, MIN_CONFIDENCE, transcript[:80],
         )
 
-    # Cleanup temp files
-    _cleanup(wav_path, audio_path)
+    # Cleanup temp files (NOT the original audio)
+    _cleanup(wav_path)
     if transcribe_path != wav_path:
-        _cleanup(transcribe_path, None)
+        _cleanup(transcribe_path)
 
     return {
         "transcript": transcript.strip(),
