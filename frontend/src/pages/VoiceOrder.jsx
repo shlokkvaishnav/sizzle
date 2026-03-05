@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { submitTextOrder, submitVoiceOrder, confirmOrder } from '../api/client'
+import { submitTextOrder, transcribeAudio, confirmOrder } from '../api/client'
 import VoiceRecorder from '../components/VoiceRecorder'
 import OrderSummary from '../components/OrderSummary'
 import KOTTicket from '../components/KOTTicket'
@@ -33,7 +33,7 @@ export default function VoiceOrder() {
     setLoading(true)
     setError(null)
     try {
-      const data = await submitVoiceOrder(audioBlob, sessionId.current)
+      const data = await transcribeAudio(audioBlob, sessionId.current)
       setResult(data)
     } catch (err) {
       const status = err.response?.status
@@ -91,6 +91,14 @@ export default function VoiceOrder() {
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 12 }}>
               Click to record, click again to stop
             </p>
+            {result?.transcript && (
+              <div style={{ marginTop: 16 }}>
+                <span className="tag tag-blue" style={{ marginBottom: 8, display: 'inline-block' }}>Language Info</span>
+                <p style={{ fontSize: 13, background: 'var(--surface2)', padding: '8px 12px', borderRadius: 4 }}>
+                  {result.transcript}
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -141,7 +149,7 @@ export default function VoiceOrder() {
       )}
 
       {/* Results */}
-      {result && (
+      {result && !result.confirmed && (
         <>
           {/* Parsed info */}
           <div className="card" style={{ marginBottom: 16 }}>
@@ -271,7 +279,6 @@ export default function VoiceOrder() {
           <div className="grid-2">
             {/* Order Summary */}
             {result.order && <OrderSummary order={result.order} />}
-
             {/* KOT Ticket */}
             {result.kot && <KOTTicket kot={result.kot} />}
           </div>
@@ -301,7 +308,7 @@ export default function VoiceOrder() {
           )}
 
           {/* Action Buttons */}
-          {result.order && !result.confirmed && (
+          {result.order && (
             <div style={{ marginTop: 16, display: 'flex', gap: 12 }}>
               <button
                 className="btn btn-primary"
@@ -320,24 +327,24 @@ export default function VoiceOrder() {
               </button>
             </div>
           )}
-
-          {result.confirmed && (
-            <div className="card" style={{ marginTop: 16, borderColor: 'var(--green, #22c55e)' }}>
-              <div className="card-body" style={{ textAlign: 'center', padding: 24 }}>
-                <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--green, #22c55e)' }}>
-                  ✅ Order Confirmed!
-                </p>
-                <button
-                  className="btn btn-primary"
-                  onClick={handleNewOrder}
-                  style={{ marginTop: 12 }}
-                >
-                  Start New Order
-                </button>
-              </div>
-            </div>
-          )}
         </>
+      )}
+
+      {result?.confirmed && (
+        <div className="card" style={{ marginTop: 16, borderColor: 'var(--green, #22c55e)' }}>
+          <div className="card-body" style={{ textAlign: 'center', padding: 24 }}>
+            <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--green, #22c55e)' }}>
+              ✅ Order Confirmed!
+            </p>
+            <button
+              className="btn btn-primary"
+              onClick={handleNewOrder}
+              style={{ marginTop: 12 }}
+            >
+              Start New Order
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
