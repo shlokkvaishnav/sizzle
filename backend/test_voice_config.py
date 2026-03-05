@@ -161,7 +161,7 @@ def test_session_memory_backend():
     from modules.voice.session_store import (
         _MemoryBackend,
         _apply_order, _apply_cancel, _apply_modify,
-        _apply_modify_targeted, _new_session,
+        _apply_modify_targeted,
     )
 
     backend = _MemoryBackend()
