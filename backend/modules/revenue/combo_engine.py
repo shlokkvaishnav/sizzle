@@ -224,16 +224,45 @@ def _run_ml_pipeline(
         if not all(antecedent_infos):
             continue
 
-        # combo_score = lift x avg_cm_of_consequent x confidence
+        # --- ML Prediction Engine: Dynamic Combo Pricing & Scoring ---
         avg_cm_consequent = consequent_info["cm_pct"]
-        combo_score = lift * avg_cm_consequent * confidence
+        # AI Score weighting: affinity (lift) + profitability (cm_pct) + reliability (confidence)
+        combo_score = (lift * 1.5) * avg_cm_consequent * (confidence * 2.0)
 
         all_names = antecedents + consequents
         all_infos = antecedent_infos + [consequent_info]
         individual_total = sum(info["price"] for info in all_infos)
         total_cost = sum(info["cost"] for info in all_infos)
-        discount_factor = 1 - (target_discount_pct / 100)
-        suggested_bundle_price = round(individual_total * discount_factor, 2)
+        
+        # Predict Elasticity / Optimal Discount based on ML features (Lift & Margin)
+        # If lift is high (> 2.5), items organically cross-sell → minimize given discount.
+        # If lift is lower (< 1.5), items need a behavioral push → higher discount to incentivize.
+        if lift >= 2.5:
+            ml_predicted_discount = 5.0
+        elif lift >= 1.5:
+            ml_predicted_discount = 10.0
+        else:
+            ml_predicted_discount = 15.0
+            
+        # Margin Check: If the items are extremely profitable, we can afford deeper cuts to drive volume
+        avg_margin_all = sum(info["cm_pct"] for info in all_infos) / len(all_infos)
+        if avg_margin_all > 65.0:
+            ml_predicted_discount += 5.0 
+            
+        # Cap ML discount to protect baseline profitability (max 25%)
+        ml_predicted_discount = min(ml_predicted_discount, 25.0)
+
+        discount_factor = 1 - (ml_predicted_discount / 100)
+        suggested_bundle_price = round(individual_total * discount_factor)
+        
+        # Clean pricing (round to nearest ₹5)
+        suggested_bundle_price = round(suggested_bundle_price / 5) * 5
+        
+        # Ensure we don't accidentally sell below cost
+        if suggested_bundle_price <= total_cost:
+             suggested_bundle_price = total_cost + 10 # Force minimal profit
+             ml_predicted_discount = round((1 - (suggested_bundle_price / individual_total)) * 100, 1)
+
         expected_margin = round(suggested_bundle_price - total_cost, 2)
 
         combos.append({
@@ -242,7 +271,7 @@ def _run_ml_pipeline(
             "item_names": all_names,
             "individual_total": individual_total,
             "combo_price": suggested_bundle_price,
-            "discount_pct": target_discount_pct,
+            "discount_pct": ml_predicted_discount,
             "expected_margin": expected_margin,
             "support": round(support, 4),
             "confidence": round(confidence, 4),
