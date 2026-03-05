@@ -40,23 +40,25 @@ export const getCategoryBreakdown = () =>
 
 // ── Voice Ordering ──
 
-export const transcribeAudio = (audioBlob) => {
+export const transcribeAudio = (audioBlob, sessionId) => {
   const form = new FormData()
-  form.append('file', audioBlob, 'recording.webm')
-  return api.post('/voice/transcribe', form).then(r => r.data)
-}
-
-export const processVoiceAudio = (audioBlob) => {
-  const form = new FormData()
-  form.append('file', audioBlob, 'recording.webm')
+  if (audioBlob) {
+    form.append('audio', audioBlob, 'recording.webm')
+  }
+  if (sessionId) {
+    form.append('session_id', sessionId)
+  }
   return api.post('/voice/process-audio', form).then(r => r.data)
 }
 
-export const processVoiceText = (text) =>
-  api.post('/voice/process', { text }).then(r => r.data)
+export const submitTextOrder = (text, sessionId) =>
+  api.post('/voice/process', { text, session_id: sessionId || null })
+    .then(r => r.data)
 
-export const confirmOrder = (orderData) =>
-  api.post('/voice/confirm-order', orderData).then(r => r.data)
+export const confirmOrder = (order, kot) =>
+  api.post('/voice/confirm-order', { order, kot }).then(r => r.data)
+
+// ── Health ──
 
 export const getVoiceOrders = () =>
   api.get('/voice/orders').then(r => r.data)

@@ -11,8 +11,19 @@ build/
 
 # Environment variables
 .env
+.env.*
 .env.local
 .env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+
+# SQLite
+*.db
+*.sqlite3
 
 # Vite cache
 frontend/.vite/

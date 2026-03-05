@@ -1,12 +1,19 @@
 """
-order_builder.py — Order JSON + KOT Generator
-================================================
-Builds a structured order from parsed items and
-generates a Kitchen Order Ticket (KOT).
+order_builder.py — Order JSON + KOT Generator + DB Persistence
+================================================================
+Builds structured orders from parsed items, generates
+Kitchen Order Tickets (KOT), and saves to database.
 """
 
+import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+
+from sqlalchemy.orm import Session
+
+from models import Order, OrderItem, KOT
+
+logger = logging.getLogger("petpooja.voice.order_builder")
 
 
 def build_order(
@@ -27,6 +34,21 @@ def build_order(
     Returns:
         Complete order dict
     """
+    if not items:
+        return {
+            "order_id": session_id or f"ORD-{uuid.uuid4().hex[:8].upper()}",
+            "items": [],
+            "item_count": 0,
+            "total_quantity": 0,
+            "subtotal": 0,
+            "tax": 0,
+            "total": 0,
+            "order_type": order_type,
+            "table_number": table_number,
+            "status": "building",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     order_id = session_id or f"ORD-{uuid.uuid4().hex[:8].upper()}"
 
     order_items = []
@@ -60,7 +82,7 @@ def build_order(
         "order_type": order_type,
         "table_number": table_number,
         "status": "building",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -68,11 +90,16 @@ def generate_kot(order: dict) -> dict:
     """
     Generate a Kitchen Order Ticket from a built order.
 
+    KOT ID format: KOT-YYYYMMDD-XXXX (random 4-char suffix)
+
     Returns:
-        KOT dict with kitchen-friendly formatting
+        KOT dict with kitchen-friendly formatting + print_ready text
     """
     if not order or not order.get("items"):
         return {}
+
+    now = datetime.now(timezone.utc)
+    kot_id = f"KOT-{now.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
 
     kot_items = []
     for item in order["items"]:
@@ -103,13 +130,112 @@ def generate_kot(order: dict) -> dict:
 
         kot_items.append(kot_line)
 
+    # Build print-ready text (plain text for kitchen printer)
+    print_lines = [
+        "=" * 32,
+        f"  KOT: {kot_id}",
+        f"  Order: {order['order_id']}",
+        f"  Table: {order.get('table_number', '-')}",
+        f"  Type: {order.get('order_type', 'dine_in')}",
+        f"  Time: {now.strftime('%d-%b %H:%M')}",
+        "-" * 32,
+    ]
+
+    for item in kot_items:
+        line = f"  {item['qty']}x {item['name']}"
+        print_lines.append(line)
+        for mod in item["modifiers"]:
+            print_lines.append(f"     → {mod}")
+        if item["notes"]:
+            print_lines.append(f"     ⚠ {item['notes']}")
+
+    print_lines.append("-" * 32)
+    print_lines.append(f"  Total Items: {sum(i['qty'] for i in kot_items)}")
+    print_lines.append("=" * 32)
+
+    print_ready = "\n".join(print_lines)
+
     return {
-        "kot_id": f"KOT-{order['order_id']}",
+        "kot_id": kot_id,
         "order_id": order["order_id"],
         "table": order.get("table_number", "-"),
         "order_type": order.get("order_type", "dine_in"),
         "items": kot_items,
+        "items_summary": [
+            {"name": i["name"], "qty": i["qty"], "modifiers": i["modifiers"]}
+            for i in kot_items
+        ],
         "total_items": sum(i["qty"] for i in kot_items),
-        "timestamp": datetime.utcnow().strftime("%d-%b %H:%M"),
+        "timestamp": now.strftime("%d-%b %H:%M"),
+        "print_ready": print_ready,
         "priority": "normal",
     }
+
+
+def save_order_to_db(order: dict, kot: dict, db: Session) -> dict:
+    """
+    Save a confirmed order to the database.
+    Writes Order + OrderItem rows + KOT row in a transaction.
+
+    Args:
+        order: Built order dict from build_order()
+        kot: KOT dict from generate_kot()
+        db: Database session
+
+    Returns:
+        Dict with saved order_id and kot_id
+
+    Raises:
+        Exception: rolls back transaction on any error
+    """
+    try:
+        # Write Order row
+        db_order = Order(
+            order_id=order["order_id"],
+            order_number=order["order_id"],
+            total_amount=order["total"],
+            status="confirmed",
+            order_type=order.get("order_type", "dine_in"),
+            table_number=order.get("table_number"),
+            source="voice",
+        )
+        db.add(db_order)
+        db.flush()
+
+        # Write OrderItem rows
+        for item in order["items"]:
+            db_item = OrderItem(
+                order_id=order["order_id"],
+                item_id=item["item_id"],
+                quantity=item["quantity"],
+                unit_price=item["unit_price"],
+                modifiers_applied=item.get("modifiers", {}),
+                line_total=item["line_total"],
+            )
+            db.add(db_item)
+
+        # Write KOT row
+        if kot and kot.get("kot_id"):
+            db_kot = KOT(
+                kot_id=kot["kot_id"],
+                order_id=order["order_id"],
+                items_summary=kot.get("items_summary", []),
+                print_ready=kot.get("print_ready", ""),
+            )
+            db.add(db_kot)
+
+        db.commit()
+        logger.info("Order %s saved to DB", order["order_id"])
+
+        return {
+            "success": True,
+            "order_id": order["order_id"],
+            "kot_id": kot.get("kot_id", ""),
+            "status": "confirmed",
+            "total": order["total"],
+        }
+
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to save order %s", order.get("order_id", "unknown"))
+        raise
