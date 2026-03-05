@@ -147,3 +147,24 @@ class VoicePipeline:
                     "confidence": match["confidence"],
                 })
         return enriched
+
+
+# ---------------------------------------------------------------------------
+# Convenience wrapper — used by Person D's routes_voice.py
+# ---------------------------------------------------------------------------
+def process_voice_order(db, audio_path: str = None, text_input: str = None,
+                        session_id: str = None) -> dict:
+    """
+    Standalone function that creates a VoicePipeline on the fly from DB
+    and processes either audio or text input.
+    """
+    from models import MenuItem
+    menu_items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
+    pipeline = VoicePipeline(db_session=db, menu_items=menu_items)
+
+    if audio_path:
+        return pipeline.process_audio(audio_path)
+    elif text_input:
+        return pipeline.process_text(text_input)
+    else:
+        return {"error": "No audio_path or text_input provided", "items": []}

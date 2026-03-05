@@ -1,8 +1,7 @@
 """
 Petpooja AI Copilot -- FastAPI Application Entry Point
 ======================================================
-No external APIs -- everything runs locally.
-SQLite database, faster-whisper STT, rule-based NLP.
+Supabase PostgreSQL database, faster-whisper STT, rule-based NLP.
 """
 
 from contextlib import asynccontextmanager
@@ -34,16 +33,17 @@ async def lifespan(app: FastAPI):
         app.state.voice_pipeline = VoicePipeline(
             db_session=db,
             menu_items=menu_items,
-            combo_rules=[],       # D fills this from combo_engine
-            hidden_stars=[],      # A fills this from hidden_stars
+            combo_rules=[],
+            hidden_stars=[],
         )
 
-        print(f"Petpooja AI Copilot -- Server ready")
-        print(f"Revenue engine loaded")
+        print("Petpooja AI Copilot -- Server ready")
+        print("Revenue engine loaded")
         print(f"Voice pipeline loaded with {len(menu_items)} menu items from DB")
     except Exception as e:
         print(f"Warning: Voice pipeline failed to load: {e}")
         print("Text-only pipeline will still work")
+        app.state.voice_pipeline = None
 
     yield
 
@@ -73,7 +73,19 @@ app.include_router(voice_router, prefix="/api/voice", tags=["Voice"])
 
 @app.get("/api/health")
 def health():
-    return {"status": "healthy", "service": "petpooja-ai-copilot", "mode": "offline"}
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "service": "petpooja-ai-copilot",
+        "mode": "offline",
+        "pipeline_loaded": hasattr(app.state, "pipeline") and app.state.pipeline is not None,
+    }
+
+
+@app.get("/health")
+def health_root():
+    """Root health check (alias)."""
+    return health()
 
 
 if __name__ == "__main__":
