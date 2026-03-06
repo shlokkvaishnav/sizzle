@@ -15,59 +15,80 @@ api.interceptors.response.use(
   }
 )
 
+// ── Helper: get current restaurant_id from localStorage ──
+function _rid() {
+  try {
+    const r = JSON.parse(localStorage.getItem('sizzle_restaurant') || '{}')
+    return r.restaurant_id || null
+  } catch { return null }
+}
+
+function _params(extra = {}) {
+  const rid = _rid()
+  return rid ? { restaurant_id: rid, ...extra } : extra
+}
+
+// ── Auth ──
+
+export const loginApi = (email, password) =>
+  api.post('/auth/login', { email, password }).then(r => r.data)
+
+export const getRestaurantProfile = (restaurantId) =>
+  api.get(`/auth/me/${restaurantId}`).then(r => r.data)
+
 // ── Revenue Intelligence ──
 
 export const getDashboardMetrics = () =>
-  api.get('/revenue/dashboard').then(r => r.data)
+  api.get('/revenue/dashboard', { params: _params() }).then(r => r.data)
 
 export const getMenuMatrix = () =>
-  api.get('/revenue/menu-matrix').then(r => r.data)
+  api.get('/revenue/menu-matrix', { params: _params() }).then(r => r.data)
 
 export const getHiddenStars = () =>
-  api.get('/revenue/hidden-stars').then(r => r.data)
+  api.get('/revenue/hidden-stars', { params: _params() }).then(r => r.data)
 
 export const getRisks = () =>
-  api.get('/revenue/risks').then(r => r.data)
+  api.get('/revenue/risks', { params: _params() }).then(r => r.data)
 
 export const getCombos = (forceRetrain = false, discountPct = 10) =>
-  api.get('/revenue/combos', { params: { force_retrain: forceRetrain, discount_pct: discountPct } }).then(r => r.data)
+  api.get('/revenue/combos', { params: _params({ force_retrain: forceRetrain, discount_pct: discountPct }) }).then(r => r.data)
 
 export const getPriceRecommendations = () =>
-  api.get('/revenue/price-recommendations').then(r => r.data)
+  api.get('/revenue/price-recommendations', { params: _params() }).then(r => r.data)
 
 export const getCategoryBreakdown = () =>
-  api.get('/revenue/category-breakdown').then(r => r.data)
+  api.get('/revenue/category-breakdown', { params: _params() }).then(r => r.data)
 
 // ── Trends & Time-Series ──
 
 export const getTrends = () =>
-  api.get('/revenue/trends').then(r => r.data)
+  api.get('/revenue/trends', { params: _params() }).then(r => r.data)
 
 export const getWowMom = () =>
-  api.get('/revenue/trends/wow-mom').then(r => r.data)
+  api.get('/revenue/trends/wow-mom', { params: _params() }).then(r => r.data)
 
 export const getPriceElasticity = () =>
-  api.get('/revenue/trends/price-elasticity').then(r => r.data)
+  api.get('/revenue/trends/price-elasticity', { params: _params() }).then(r => r.data)
 
 // ── Advanced Analytics ──
 
 export const getCannibalization = (days = 90) =>
-  api.get('/revenue/analytics/cannibalization', { params: { days } }).then(r => r.data)
+  api.get('/revenue/analytics/cannibalization', { params: _params({ days }) }).then(r => r.data)
 
 export const getPriceSensitivity = () =>
-  api.get('/revenue/analytics/price-sensitivity').then(r => r.data)
+  api.get('/revenue/analytics/price-sensitivity', { params: _params() }).then(r => r.data)
 
 export const getWasteAnalysis = (days = 30) =>
-  api.get('/revenue/analytics/waste', { params: { days } }).then(r => r.data)
+  api.get('/revenue/analytics/waste', { params: _params({ days }) }).then(r => r.data)
 
 export const getCustomerReturns = (days = 30) =>
-  api.get('/revenue/analytics/customer-returns', { params: { days } }).then(r => r.data)
+  api.get('/revenue/analytics/customer-returns', { params: _params({ days }) }).then(r => r.data)
 
 export const getMenuComplexity = () =>
-  api.get('/revenue/analytics/menu-complexity').then(r => r.data)
+  api.get('/revenue/analytics/menu-complexity', { params: _params() }).then(r => r.data)
 
 export const getOperationalMetrics = (days = 30) =>
-  api.get('/revenue/analytics/operational', { params: { days } }).then(r => r.data)
+  api.get('/revenue/analytics/operational', { params: _params({ days }) }).then(r => r.data)
 
 // ── Voice Ordering ──
 

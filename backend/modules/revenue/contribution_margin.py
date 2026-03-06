@@ -11,7 +11,7 @@ from sqlalchemy import func
 from models import MenuItem, SaleTransaction
 
 
-def calculate_margins(db: Session) -> list[dict]:
+def calculate_margins(db: Session, restaurant_id: int = None) -> list[dict]:
     """
     Calculate contribution margin for all active menu items.
 
@@ -30,18 +30,28 @@ def calculate_margins(db: Session) -> list[dict]:
         }
     ]
     """
-    # Get items with revenue data — eagerly load category to avoid N+1
-    items = (
+    # Revenue per item via subquery to avoid GROUP BY issues with many columns
+    from sqlalchemy.orm import aliased
+    from sqlalchemy import select
+
+    rev_sq = (
         db.query(
-            MenuItem,
+            SaleTransaction.item_id,
             func.coalesce(func.sum(SaleTransaction.total_price), 0).label("total_revenue"),
         )
-        .outerjoin(SaleTransaction, MenuItem.id == SaleTransaction.item_id)
+        .group_by(SaleTransaction.item_id)
+        .subquery()
+    )
+
+    q = (
+        db.query(MenuItem, func.coalesce(rev_sq.c.total_revenue, 0))
+        .outerjoin(rev_sq, MenuItem.id == rev_sq.c.item_id)
         .options(joinedload(MenuItem.category))
         .filter(MenuItem.is_available == True)
-        .group_by(MenuItem.id)
-        .all()
     )
+    if restaurant_id:
+        q = q.filter(MenuItem.restaurant_id == restaurant_id)
+    items = q.all()
 
     results = []
     for item, total_revenue in items:

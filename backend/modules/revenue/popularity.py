@@ -13,7 +13,7 @@ from sqlalchemy import func
 from models import MenuItem, SaleTransaction
 
 
-def calculate_popularity(db: Session, days: int = 30) -> list[dict]:
+def calculate_popularity(db: Session, days: int = 30, restaurant_id: int = None) -> list[dict]:
     """
     Calculate popularity metrics for all menu items
     based on recent sales data.
@@ -33,16 +33,14 @@ def calculate_popularity(db: Session, days: int = 30) -> list[dict]:
     """
     # Aggregate sales per item — filtered to recent window
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    sales_data = (
-        db.query(
-            SaleTransaction.item_id,
-            func.sum(SaleTransaction.quantity).label("total_qty"),
-            func.count(SaleTransaction.id).label("order_count"),
-        )
-        .filter(SaleTransaction.sold_at >= cutoff)
-        .group_by(SaleTransaction.item_id)
-        .all()
-    )
+    sq = db.query(
+        SaleTransaction.item_id,
+        func.sum(SaleTransaction.quantity).label("total_qty"),
+        func.count(SaleTransaction.id).label("order_count"),
+    ).filter(SaleTransaction.sold_at >= cutoff)
+    if restaurant_id:
+        sq = sq.filter(SaleTransaction.restaurant_id == restaurant_id)
+    sales_data = sq.group_by(SaleTransaction.item_id).all()
 
     sales_map = {
         row.item_id: {
@@ -53,12 +51,10 @@ def calculate_popularity(db: Session, days: int = 30) -> list[dict]:
     }
 
     # Get all items — eagerly load category to avoid N+1
-    items = (
-        db.query(MenuItem)
-        .options(joinedload(MenuItem.category))
-        .filter(MenuItem.is_available == True)
-        .all()
-    )
+    iq = db.query(MenuItem).options(joinedload(MenuItem.category)).filter(MenuItem.is_available == True)
+    if restaurant_id:
+        iq = iq.filter(MenuItem.restaurant_id == restaurant_id)
+    items = iq.all()
 
     results = []
 

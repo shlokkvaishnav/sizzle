@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from database import engine, Base, SessionLocal, get_db
 from api.routes_revenue import router as revenue_router
 from api.routes_voice import router as voice_router
+from api.routes_auth import router as auth_router
 from api.auth import require_auth, authenticate_staff
 from api.rate_limit import rate_limit_middleware
 
@@ -135,6 +136,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # ── Route registration (auth-gated when AUTH_ENABLED=true) ──
+app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(
     revenue_router,
     prefix="/api/revenue",
