@@ -1,11 +1,11 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { submitTextOrder, transcribeAudio, confirmOrder } from '../api/client'
 import VoiceRecorder from '../components/VoiceRecorder'
 import OrderSummary from '../components/OrderSummary'
 import KOTTicket from '../components/KOTTicket'
 import { motion, AnimatePresence } from 'motion/react'
 import { StaggerReveal, staggerContainer, staggerItem } from '../utils/animations'
-import { Trash2, ShoppingCart, ChevronUp, ChevronDown, X, ClipboardList, CheckCircle } from 'lucide-react'
+import { Trash2, ShoppingCart, ClipboardList, CheckCircle } from 'lucide-react'
 
 function generateSessionId() {
   return 'sess-' + Math.random().toString(36).slice(2, 10)
@@ -18,10 +18,13 @@ export default function VoiceOrder() {
   const [error, setError] = useState(null)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [actionFeedback, setActionFeedback] = useState(null) // {type, message}
-  const [orderTabOpen, setOrderTabOpen] = useState(false)
   const [confirmedOrders, setConfirmedOrders] = useState([]) // Array of confirmed order snapshots
+  const [autoListenEnabled, setAutoListenEnabled] = useState(true)
   const sessionId = useRef(generateSessionId())
   const currentAudioRef = useRef(null)
+  const recorderRef = useRef(null)
+  const autoListenRef = useRef(true)
+  const lastIntentRef = useRef(null)
 
   // ── TTS Audio Playback ──
   const playTTSAudio = useCallback((base64Audio) => {
@@ -41,6 +44,10 @@ export default function VoiceOrder() {
     audio.onended = () => {
       URL.revokeObjectURL(url)
       setIsSpeaking(false)
+      // Auto-listen: restart recording after TTS finishes (skip after CONFIRM)
+      if (autoListenRef.current && lastIntentRef.current !== 'CONFIRM') {
+        setTimeout(() => recorderRef.current?.startRecording(), 600)
+      }
     }
     audio.onerror = () => {
       URL.revokeObjectURL(url)
@@ -63,12 +70,10 @@ export default function VoiceOrder() {
   const processResult = useCallback((data) => {
     setResult(data)
 
-    // Auto-open order tab when items exist in cart
-    if (data.session_items?.length > 0) {
-      setOrderTabOpen(true)
-    } else {
-      setOrderTabOpen(false)
-    }
+    // Track last intent for auto-listen decisions
+    lastIntentRef.current = data.intent
+    // Keep autoListenRef in sync
+    autoListenRef.current = autoListenEnabled
 
     // Show action feedback based on intent
     const intent = data.intent
@@ -86,6 +91,8 @@ export default function VoiceOrder() {
     } else if (intent === 'ORDER' && data.items?.length > 0) {
       const names = data.items.map(i => `${i.quantity}× ${i.item_name}`).join(', ')
       setActionFeedback({ type: 'add', message: `Added: ${names}` })
+    } else if (intent === 'DONE') {
+      setActionFeedback({ type: 'info', message: data.tts_text || 'Should I place the order?' })
     } else if (intent === 'CONFIRM') {
       // Voice-triggered confirmation
       setActionFeedback({ type: 'confirm', message: 'Order confirmed via voice!' })
@@ -164,7 +171,6 @@ export default function VoiceOrder() {
       // Reset for new order
       setResult(null)
       setActionFeedback({ type: 'confirm', message: 'Order confirmed! KOT sent to kitchen.' })
-      setOrderTabOpen(false)
       sessionId.current = generateSessionId()
     } catch (err) {
       setError(err.response?.data?.detail || err.detail || 'Order confirmation failed')
@@ -189,7 +195,6 @@ export default function VoiceOrder() {
       // Reset for new order
       setResult(null)
       setActionFeedback({ type: 'confirm', message: 'Order confirmed! KOT sent to kitchen.' })
-      setOrderTabOpen(false)
       sessionId.current = generateSessionId()
     } catch (err) {
       setError(err.response?.data?.detail || err.detail || 'Order confirmation failed')
@@ -203,9 +208,18 @@ export default function VoiceOrder() {
     setError(null)
     setTextInput('')
     setActionFeedback(null)
-    setOrderTabOpen(false)
     sessionId.current = generateSessionId()
   }
+
+  // ── Auto-listen silence callback ──
+  const handleAutoListenSilence = useCallback(() => {
+    // Silence detected with no speech during auto-listen — do nothing, stay idle
+  }, [])
+
+  // Keep autoListenRef in sync with state
+  useEffect(() => {
+    autoListenRef.current = autoListenEnabled
+  }, [autoListenEnabled])
 
   const confColor = (c) => c >= 0.9 ? 'var(--success)' : c >= 0.85 ? 'var(--warning)' : 'var(--danger)'
 
@@ -303,7 +317,13 @@ export default function VoiceOrder() {
               {hasCart && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}> — say "remove", "add", or "confirm"</span>}
             </div>
             <div className="card-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 32 }}>
-              <VoiceRecorder onRecorded={handleAudioRecorded} onStartRecording={handleInterruptAudio} />
+              <VoiceRecorder
+                ref={recorderRef}
+                onRecorded={handleAudioRecorded}
+                onStartRecording={handleInterruptAudio}
+                autoListen={autoListenEnabled}
+                onAutoListenSilence={handleAutoListenSilence}
+              />
               {isSpeaking && (
                 <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 20, justifyContent: 'center', marginTop: 12 }}>
                   {[8, 16, 10].map((h, i) => (
@@ -535,7 +555,16 @@ export default function VoiceOrder() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1, duration: 0.4 }}
             >
-              <div className="card-header">Parsed Input</div>
+              <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                Parsed Input
+                <span style={{
+                  fontSize: 9, fontWeight: 700, letterSpacing: '0.08em',
+                  padding: '2px 6px', borderRadius: 'var(--radius-full)',
+                  background: 'color-mix(in srgb, var(--warning) 18%, transparent)',
+                  color: 'var(--warning)', border: '1px solid var(--warning)',
+                  textTransform: 'uppercase',
+                }}>TEST</span>
+              </div>
               <div className="card-body">
                 {result.transcript && (
                   <div style={{ marginBottom: 8 }}>
@@ -572,7 +601,16 @@ export default function VoiceOrder() {
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ delay: 0.3, duration: 0.4 }}
               >
-                <div className="card-header" style={{ color: 'var(--warning)' }}>Did you mean…?</div>
+                <div className="card-header" style={{ color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  Did you mean…?
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, letterSpacing: '0.08em',
+                    padding: '2px 6px', borderRadius: 'var(--radius-full)',
+                    background: 'color-mix(in srgb, var(--warning) 18%, transparent)',
+                    color: 'var(--warning)', border: '1px solid var(--warning)',
+                    textTransform: 'uppercase',
+                  }}>TEST</span>
+                </div>
                 <div className="card-body">
                   <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
                     Some items had low match confidence. Please verify:
@@ -779,186 +817,6 @@ export default function VoiceOrder() {
         )}
       </AnimatePresence>
 
-      {/* ── Floating Order Tab ── */}
-      <AnimatePresence>
-        {hasCart && (
-          <>
-            {/* Floating toggle button */}
-            <motion.button
-              initial={{ scale: 0, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0, opacity: 0 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-              onClick={() => setOrderTabOpen(prev => !prev)}
-              style={{
-                position: 'fixed', bottom: 24, right: 24, zIndex: 1000,
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '12px 20px', borderRadius: 'var(--radius-full)',
-                background: 'var(--accent)', color: 'white', border: 'none',
-                cursor: 'pointer', fontFamily: 'var(--font-body)',
-                fontSize: 14, fontWeight: 700,
-                boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
-              }}
-              whileHover={{ scale: 1.05, y: -2 }}
-              whileTap={{ scale: 0.95 }}
-            >
-              <ShoppingCart size={18} />
-              <span>{cartItems.length} {cartItems.length === 1 ? 'item' : 'items'}</span>
-              <span style={{ fontFamily: 'var(--font-mono)' }}>₹{effectiveOrder?.total || 0}</span>
-              {orderTabOpen ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-
-              {/* Pulse badge on new item */}
-              <motion.span
-                key={cartItems.length}
-                initial={{ scale: 1.5, opacity: 1 }}
-                animate={{ scale: 1, opacity: 0 }}
-                transition={{ duration: 0.6 }}
-                style={{
-                  position: 'absolute', inset: 0, borderRadius: 'var(--radius-full)',
-                  border: '2px solid var(--accent)', pointerEvents: 'none',
-                }}
-              />
-            </motion.button>
-
-            {/* Slide-up order panel */}
-            <AnimatePresence>
-              {orderTabOpen && (
-                <motion.div
-                  initial={{ y: '100%', opacity: 0 }}
-                  animate={{ y: 0, opacity: 1 }}
-                  exit={{ y: '100%', opacity: 0 }}
-                  transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-                  style={{
-                    position: 'fixed', bottom: 80, right: 24, zIndex: 999,
-                    width: 360, maxHeight: 'calc(100vh - 140px)',
-                    background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
-                    borderRadius: 'var(--radius-lg)',
-                    boxShadow: '0 8px 40px rgba(0,0,0,0.35)',
-                    display: 'flex', flexDirection: 'column',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {/* Panel header */}
-                  <div style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)',
-                    background: 'var(--bg-elevated)',
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <ShoppingCart size={16} style={{ color: 'var(--accent)' }} />
-                      <span style={{ fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-display)' }}>Current Order</span>
-                    </div>
-                    <button
-                      onClick={() => setOrderTabOpen(false)}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 2 }}
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-
-                  {/* Items list */}
-                  <div style={{ overflowY: 'auto', flex: 1, padding: '8px 0' }}>
-                    {cartItems.map((item, idx) => (
-                      <motion.div
-                        key={item.item_id || idx}
-                        initial={{ opacity: 0, x: -8 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: idx * 0.04 }}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 10,
-                          padding: '10px 16px',
-                          borderBottom: idx < cartItems.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                        }}
-                      >
-                        {/* Veg/Non-veg dot */}
-                        {item.is_veg !== undefined && (
-                          <span style={{
-                            width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                            background: item.is_veg ? '#22c55e' : '#ef4444',
-                          }} />
-                        )}
-
-                        {/* Item info */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {item.quantity}× {item.item_name || item.name}
-                          </div>
-                          {/* Modifier tags */}
-                          {item.modifiers && item.modifiers.spice_level && item.modifiers.spice_level !== 'medium' && (
-                            <span style={{
-                              fontSize: 10, padding: '1px 5px', borderRadius: 'var(--radius-full)',
-                              background: 'var(--warning-subtle)', color: 'var(--warning)',
-                            }}>🌶️ {item.modifiers.spice_level}</span>
-                          )}
-                        </div>
-
-                        {/* Price */}
-                        <span style={{ fontSize: 13, fontFamily: 'var(--font-mono)', fontWeight: 600, flexShrink: 0 }}>
-                          ₹{item.line_total}
-                        </span>
-
-                        {/* Remove btn */}
-                        <button
-                          onClick={() => handleRemoveItem(item.item_name || item.name)}
-                          disabled={loading}
-                          style={{
-                            background: 'none', border: 'none', cursor: 'pointer',
-                            color: 'var(--text-muted)', padding: 2, flexShrink: 0,
-                            transition: 'color 0.2s',
-                          }}
-                          onMouseEnter={e => e.currentTarget.style.color = 'var(--danger)'}
-                          onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
-                          title={`Remove ${item.item_name || item.name}`}
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </motion.div>
-                    ))}
-                  </div>
-
-                  {/* Totals footer */}
-                  {effectiveOrder && (
-                    <div style={{
-                      padding: '12px 16px', borderTop: '1px solid var(--border-subtle)',
-                      background: 'var(--bg-elevated)',
-                    }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)', marginBottom: 3 }}>
-                        <span>Subtotal</span>
-                        <span style={{ fontFamily: 'var(--font-mono)' }}>₹{effectiveOrder.subtotal}</span>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>
-                        <span>GST (5%)</span>
-                        <span style={{ fontFamily: 'var(--font-mono)' }}>₹{effectiveOrder.tax}</span>
-                      </div>
-                      <div style={{
-                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        fontSize: 16, fontWeight: 800, fontFamily: 'var(--font-mono)',
-                        color: 'var(--accent)',
-                        borderTop: '1px solid var(--border-mid)', paddingTop: 8,
-                      }}>
-                        <span style={{ fontFamily: 'var(--font-body)' }}>Total</span>
-                        <span>₹{effectiveOrder.total}</span>
-                      </div>
-
-                      {/* Quick confirm button */}
-                      <motion.button
-                        className="btn btn-primary"
-                        onClick={handleConfirm}
-                        disabled={loading}
-                        style={{ width: '100%', marginTop: 10, fontSize: 13 }}
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
-                      >
-                        {loading ? 'Confirming…' : `Confirm Order`}
-                      </motion.button>
-                    </div>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </>
-        )}
-      </AnimatePresence>
     </motion.div>
   )
 }

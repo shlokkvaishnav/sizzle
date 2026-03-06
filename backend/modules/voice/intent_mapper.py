@@ -29,8 +29,11 @@ _CLAUSE_SPLITTERS = re.compile(
 
 # ── Intent patterns — linguistic ordering phrases ──
 INTENT_PATTERNS = {
+    "DONE": [
+        r"\b(done|that'?s?\s*it|that'?s?\s*all|bas|buss|ho\s*gaya|ho\s*gya|hogaya|hogya|khatam|enough|no\s*more|nothing\s*else|aur\s*nahi|aur\s*kuch\s*nahi|itna\s*hi|over|finish)\b",
+    ],
     "CONFIRM": [
-        r"\b(yes|haan|ha|okay|ok|theek hai|sahi|bilkul|confirm|done|ho gaya|correct|right)\b",
+        r"\b(yes|haan|ha|okay|ok|theek hai|sahi|bilkul|confirm|correct|right|place\s*(?:the\s*)?order|laga\s*do|kar\s*do)\b",
     ],
     "CANCEL": [
         r"\b(cancel|remove|hatao|hata\s+do|mat\s+dena|nahi\s+chahiye|wrong|galat|undo|nikal)\b",
@@ -79,11 +82,17 @@ def _classify_single_clause(text: str) -> Tuple[str, str]:
 
     text_lower = text.lower().strip()
 
-    # 1. CONFIRM
+    # 1. CONFIRM (explicit yes/confirm)
     for pattern in INTENT_PATTERNS["CONFIRM"]:
         match = re.search(pattern, text_lower)
         if match:
             return "CONFIRM", match.group()
+
+    # 1b. DONE ("that's it", "bas", "ho gaya" — signals ordering is finished)
+    for pattern in INTENT_PATTERNS["DONE"]:
+        match = re.search(pattern, text_lower)
+        if match:
+            return "DONE", match.group()
 
     # 2. CANCEL
     for pattern in INTENT_PATTERNS["CANCEL"]:
@@ -144,7 +153,7 @@ def classify_intent(text: str) -> Tuple[str, str]:
     if not results:
         return "UNKNOWN", ""
     # Priority: CANCEL > CONFIRM > MODIFY > REPEAT > QUERY > ORDER > UNKNOWN
-    priority = ["CANCEL", "CONFIRM", "MODIFY", "REPEAT", "QUERY", "ORDER", "UNKNOWN"]
+    priority = ["CANCEL", "CONFIRM", "DONE", "MODIFY", "REPEAT", "QUERY", "ORDER", "UNKNOWN"]
     for p in priority:
         for r in results:
             if r["intent"] == p:

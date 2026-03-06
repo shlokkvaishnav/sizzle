@@ -204,6 +204,13 @@ class LLMResponseGenerator:
             if err == "audio_too_short":
                 return self._t_audio_short(lang)
 
+        if intent == "DONE":
+            session_items = pipeline_result.get("session_items", [])
+            if session_items:
+                return self._t_done(lang)
+            else:
+                return self._t_done_empty(lang)
+
         # Intent-based templates
         if intent == "ORDER":
             if len(items) == 0:
@@ -362,6 +369,28 @@ class LLMResponseGenerator:
             "gu": "થોડું વધુ બોલો.",
             "mr": "थोडे अधिक बोला.",
             "kn": "ಸ್ವಲ್ಪ ಹೆಚ್ಚು ಮಾತನಾಡಿ.",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_done(lang: str) -> str:
+        templates = {
+            "en": "Should I place the order now?",
+            "hi": "Kya order place kar doon?",
+            "gu": "\u0a93\u0ab0\u0acd\u0aa1\u0ab0 \u0aae\u0ac2\u0a95\u0ac0 \u0aa6\u0a89\u0a82?",
+            "mr": "\u0911\u0930\u094d\u0921\u0930 \u0932\u093e\u0935\u0942 \u0915\u093e?",
+            "kn": "\u0c86\u0cb0\u0ccd\u0ca1\u0cb0\u0ccd \u0cae\u0cbe\u0ca1\u0cb2\u0cc7?",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_done_empty(lang: str) -> str:
+        templates = {
+            "en": "You haven't ordered anything yet. What would you like?",
+            "hi": "Abhi kuch order nahi hua hai. Kya mangna hai?",
+            "gu": "\u0ab9\u0a9c\u0ac1 \u0a95\u0a82\u0a88 \u0a93\u0ab0\u0acd\u0aa1\u0ab0 \u0aa8\u0aa5\u0ac0. \u0ab6\u0ac1\u0a82 \u0a9c\u0acb\u0a88\u0a8f?",
+            "mr": "\u0905\u091c\u0942\u0928 \u0915\u093e\u0939\u0940 \u0911\u0930\u094d\u0921\u0930 \u0928\u093e\u0939\u0940. \u0915\u093e\u092f \u0939\u0935\u0947?",
+            "kn": "\u0c87\u0ca8\u0ccd\u0ca8\u0cc2 \u0caf\u0cbe\u0cb5\u0cc1\u0ca6\u0cc7 \u0c86\u0cb0\u0ccd\u0ca1\u0cb0\u0ccd \u0c87\u0cb2\u0ccd\u0cb2. \u0c8f\u0ca8\u0cc1 \u0cac\u0cc7\u0c95\u0cc1?",
         }
         return templates.get(lang, templates["en"])
 
