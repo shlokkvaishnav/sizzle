@@ -11,6 +11,7 @@ const responseCache = new Map()
 const SHORT_CACHE_TTL_MS = 20000
 const DEFAULT_CACHE_TTL_MS = 45000
 const LONG_CACHE_TTL_MS = 120000
+const MAX_CACHE_ENTRIES = 200
 const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504])
 
 function normalizeError(error) {
@@ -46,6 +47,10 @@ function readCache(key) {
 }
 
 function writeCache(key, data, ttlMs = DEFAULT_CACHE_TTL_MS) {
+  if (responseCache.size >= MAX_CACHE_ENTRIES && !responseCache.has(key)) {
+    const oldestKey = responseCache.keys().next().value
+    if (oldestKey) responseCache.delete(oldestKey)
+  }
   responseCache.set(key, { data, ts: Date.now(), ttlMs })
 }
 
@@ -147,6 +152,9 @@ export const loginApi = (email, password) =>
 export const getRestaurantProfile = (restaurantId) =>
   getWithCache(`/auth/me/${restaurantId}`, { ttlMs: LONG_CACHE_TTL_MS })
 
+export const updateRestaurantProfile = (restaurantId, payload) =>
+  patch(`/auth/me/${restaurantId}`, payload)
+
 export const getDashboardMetrics = () =>
   getWithCache('/revenue/dashboard', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
@@ -225,6 +233,29 @@ export const getVoiceOrders = () =>
 export const getOpsOrders = (params = {}) =>
   getWithCache('/ops/orders', { params, ttlMs: SHORT_CACHE_TTL_MS })
 
+export const getOpsOrder = (orderId) =>
+  getWithCache(`/ops/orders/${orderId}`, { ttlMs: SHORT_CACHE_TTL_MS })
+
+export const createOpsOrder = (payload) =>
+  post('/ops/orders', payload).then((data) => {
+    invalidateCacheByPrefix('/ops/orders?')
+    return data
+  })
+
+export const updateOpsOrder = (orderId, payload) =>
+  patch(`/ops/orders/${orderId}`, payload).then((data) => {
+    invalidateCacheByPrefix('/ops/orders?')
+    invalidateCacheByPrefix('/ops/tables?')
+    return data
+  })
+
+export const cancelOpsOrder = (orderId) =>
+  post(`/ops/orders/${orderId}/cancel`, {}).then((data) => {
+    invalidateCacheByPrefix('/ops/orders?')
+    invalidateCacheByPrefix('/ops/tables?')
+    return data
+  })
+
 export const getOpsTables = () =>
   getWithCache('/ops/tables', { ttlMs: SHORT_CACHE_TTL_MS })
 
@@ -244,13 +275,34 @@ export const getOpsReportsFiltered = (params = {}) =>
   getWithCache('/ops/reports', { params, ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsSettings = () =>
-  getWithCache('/ops/settings', { ttlMs: LONG_CACHE_TTL_MS })
+  getWithCache('/ops/settings', { params: _params(), ttlMs: LONG_CACHE_TTL_MS })
+
+export const updateOpsSettings = (payload) =>
+  patch('/ops/settings', _params(payload)).then((data) => {
+    invalidateCacheByPrefix('/ops/settings?')
+    return data
+  })
+
+export const createSettingsStaff = (payload) =>
+  post('/ops/settings/staff', _params(payload)).then((data) => {
+    invalidateCacheByPrefix('/ops/settings?')
+    return data
+  })
+
+export const updateSettingsStaff = (staffId, payload) =>
+  patch(`/ops/settings/staff/${staffId}`, payload).then((data) => {
+    invalidateCacheByPrefix('/ops/settings?')
+    return data
+  })
 
 export const updateTableStatus = (tableId, payload) =>
   patch(`/ops/tables/${tableId}`, payload).then((data) => {
     invalidateCacheByPrefix('/ops/tables?')
     return data
   })
+
+export const previewTableMerge = (tableIds) =>
+  post('/ops/tables/merge-preview', { table_ids: tableIds })
 
 export const adjustInventory = (payload) =>
   post('/ops/inventory/adjust', payload).then((data) => {

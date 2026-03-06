@@ -1,15 +1,15 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { getMenuMatrix, getTrends } from '../api/client'
 import MenuMatrix from '../components/MenuMatrix'
 import ItemTable from '../components/ItemTable'
 import { motion } from 'motion/react'
-import { StaggerReveal, ScrollReveal, staggerContainer, staggerItem, fadeInUp } from '../utils/animations'
+import { ScrollReveal, fadeInUp } from '../utils/animations'
 
 const QUAD_META = {
-  star: { label: 'Stars', color: 'var(--success)' },
-  hidden_star: { label: 'Hidden Gems', color: 'var(--data-5)' },
-  workhorse: { label: 'Plowhorses', color: 'var(--warning)' },
-  dog: { label: 'Underperformers', color: 'var(--danger)' },
+  star: { label: 'Stars', color: 'var(--success)', icon: '⭐' },
+  puzzle: { label: 'Hidden Gems', color: 'var(--info)', icon: '🔷' },
+  plowhorse: { label: 'Plowhorses', color: 'var(--warning)', icon: '🐴' },
+  dog: { label: 'Underperformers', color: 'var(--danger)', icon: '📉' },
 }
 
 export default function MenuAnalysis() {
@@ -19,22 +19,23 @@ export default function MenuAnalysis() {
   const [trendsLoading, setTrendsLoading] = useState(true)
   const [quadrantFilter, setQuadrantFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
+  const [showAllCategoryTrends, setShowAllCategoryTrends] = useState(false)
+  const [trendSortBy, setTrendSortBy] = useState('revenue_last_30d')
+  const [trendSortDir, setTrendSortDir] = useState('desc')
 
   useEffect(() => {
     let active = true
 
-    // Render page as soon as matrix data is ready.
     getMenuMatrix()
       .then((matrixData) => {
         if (!active) return
         setData(matrixData)
       })
-      .catch(err => console.error('Menu Matrix failed:', err))
+      .catch((err) => console.error('Menu Matrix failed:', err))
       .finally(() => {
         if (active) setLoading(false)
       })
 
-    // Load trend enrichments in the background.
     getTrends()
       .then((trendsData) => {
         if (!active) return
@@ -50,23 +51,39 @@ export default function MenuAnalysis() {
     }
   }, [])
 
+  const categoryTrends = useMemo(() => {
+    const rows = [...(trends?.category_trends || [])]
+      .filter((row) => {
+        if (showAllCategoryTrends) return true
+        return (row.revenue_last_30d || 0) > 0 || (row.revenue_prev_30d || 0) > 0
+      })
+
+    rows.sort((a, b) => {
+      const aVal = a[trendSortBy] || 0
+      const bVal = b[trendSortBy] || 0
+      return trendSortDir === 'desc' ? bVal - aVal : aVal - bVal
+    })
+
+    return rows
+  }, [trends, showAllCategoryTrends, trendSortBy, trendSortDir])
+
   if (loading) {
-    return <div className="loading"><div className="spinner" /> Analyzing menu...</div>
+    return <div className="loading"><div className="spinner" />Analyzing menu...</div>
   }
 
   if (!data || !data.items) {
     return <div className="loading">Failed to load data. Is the backend running?</div>
   }
 
-  const { items, summary } = data
-  const categories = ['all', ...Array.from(new Set(items.map(i => i.category)))]
+  const items = data.items || []
+  const categories = ['all', ...Array.from(new Set(items.map((i) => i.category)))]
 
   const itemTrendMap = {}
   if (trends?.item_trends) {
-    for (const t of trends.item_trends) itemTrendMap[t.item_id] = t
+    for (const trend of trends.item_trends) itemTrendMap[trend.item_id] = trend
   }
 
-  const enrichedItems = items.map(item => {
+  const enrichedItems = items.map((item) => {
     const trend = itemTrendMap[item.item_id]
     return {
       ...item,
@@ -78,17 +95,28 @@ export default function MenuAnalysis() {
   })
 
   const quadrantCounts = {
-    star: items.filter(i => i.quadrant === 'star').length,
-    hidden_star: items.filter(i => i.quadrant === 'hidden_star').length,
-    workhorse: items.filter(i => i.quadrant === 'workhorse').length,
-    dog: items.filter(i => i.quadrant === 'dog').length,
+    star: items.filter((i) => i.quadrant === 'star').length,
+    puzzle: items.filter((i) => i.quadrant === 'puzzle').length,
+    plowhorse: items.filter((i) => i.quadrant === 'plowhorse').length,
+    dog: items.filter((i) => i.quadrant === 'dog').length,
   }
 
   const driftItems = trends?.quadrant_drift || []
   const driftByQuadrant = {}
-  for (const d of driftItems) {
-    driftByQuadrant[d.current_quadrant] = (driftByQuadrant[d.current_quadrant] || 0) + 1
+  for (const drift of driftItems) {
+    driftByQuadrant[drift.current_quadrant] = (driftByQuadrant[drift.current_quadrant] || 0) + 1
   }
+
+  const handleTrendSort = (column) => {
+    if (trendSortBy === column) {
+      setTrendSortDir((prev) => (prev === 'desc' ? 'asc' : 'desc'))
+    } else {
+      setTrendSortBy(column)
+      setTrendSortDir('desc')
+    }
+  }
+
+  const trendSortIcon = (column) => (trendSortBy === column ? (trendSortDir === 'desc' ? ' ↓' : ' ↑') : '')
 
   return (
     <motion.div
@@ -106,7 +134,7 @@ export default function MenuAnalysis() {
         <div>
           <div className="app-hero-eyebrow">Intelligence</div>
           <h1 className="app-hero-title">Menu Intelligence</h1>
-          <p className="app-hero-sub">BCG matrix classification with trend analysis.</p>
+          <p className="app-hero-sub">Menu performance by profitability and popularity. See which items are driving your revenue.</p>
         </div>
       </motion.div>
 
@@ -118,64 +146,40 @@ export default function MenuAnalysis() {
         </div>
       )}
 
-      {/* Quadrant stat pills */}
-      <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', marginBottom: 'var(--space-6)' }}>
+      <div className="quadrant-chip-row">
         {Object.entries(QUAD_META).map(([id, meta]) => {
-          const count = summary?.[id]?.count ?? quadrantCounts[id]
           const active = quadrantFilter === id
           return (
-            <motion.button
+            <button
               key={id}
+              className={`quadrant-chip ${active ? 'quadrant-chip--active' : ''}`}
+              style={{ '--quad-color': meta.color }}
               onClick={() => setQuadrantFilter(active ? 'all' : id)}
-              whileHover={{ y: -2 }}
-              whileTap={{ scale: 0.97 }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: 'var(--space-2) var(--space-4)',
-                borderRadius: 'var(--radius-full)',
-                border: `1px solid ${active ? meta.color : 'var(--border-subtle)'}`,
-                background: active ? `color-mix(in srgb, ${meta.color} 10%, transparent)` : 'var(--bg-surface)',
-                cursor: 'pointer',
-                color: active ? meta.color : 'var(--text-secondary)',
-                fontSize: 13, fontFamily: 'var(--font-body)', fontWeight: 500,
-                transition: 'var(--transition-fast)',
-              }}
             >
-              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 16, color: meta.color }}>{count}</span>
-              <span>{meta.label}</span>
-              {driftByQuadrant[id] > 0 && (
-                <span style={{
-                  fontSize: 10, padding: '1px 5px', borderRadius: 'var(--radius-full)',
-                  background: 'var(--warning-subtle)', color: 'var(--warning)',
-                }}>
-                  {driftByQuadrant[id]} drifting
-                </span>
-              )}
-            </motion.button>
+              <span className="quadrant-chip-icon">{meta.icon}</span>
+              <span className="quadrant-chip-count">{quadrantCounts[id]}</span>
+              <span className="quadrant-chip-label">{meta.label}</span>
+              <span className="quadrant-chip-drift">{driftByQuadrant[id] || 0} drifting</span>
+            </button>
           )
         })}
       </div>
 
-      <StaggerReveal className="grid-2" variants={staggerContainer}>
-        {/* BCG Matrix Chart */}
-        <motion.div className="card" style={{ marginBottom: 24 }} variants={staggerItem}>
+      <div className="grid-2">
+        <div className="card" style={{ marginBottom: 24 }}>
           <div className="card-header">BCG Menu Matrix</div>
           <div className="card-body">
             <MenuMatrix items={items} />
           </div>
-        </motion.div>
+        </div>
 
-        {/* Menu Items table */}
-        <motion.div className="card" variants={staggerItem}>
+        <div className="card">
           <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>Menu Items</span>
             <div style={{ display: 'flex', gap: 8 }}>
-              <select
-                value={categoryFilter}
-                onChange={e => setCategoryFilter(e.target.value)}
-              >
-                {categories.map(c => (
-                  <option key={c} value={c}>{c === 'all' ? 'All Categories' : c}</option>
+              <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+                {categories.map((category) => (
+                  <option key={category} value={category}>{category === 'all' ? 'All Categories' : category}</option>
                 ))}
               </select>
               {quadrantFilter !== 'all' && (
@@ -185,38 +189,51 @@ export default function MenuAnalysis() {
               )}
             </div>
           </div>
-          <div className="card-body" style={{ padding: 0, maxHeight: 440, overflowY: 'auto' }}>
+          <div className="card-body" style={{ padding: 0, maxHeight: 460, overflowY: 'auto' }}>
             <ItemTable items={enrichedItems} categoryFilter={categoryFilter} quadrantFilter={quadrantFilter} />
           </div>
-        </motion.div>
-      </StaggerReveal>
+        </div>
+      </div>
 
-      {/* Category Trends */}
-      {trends?.category_trends?.length > 0 && (
+      {categoryTrends.length > 0 && (
         <ScrollReveal variants={fadeInUp}>
           <div className="card" style={{ marginTop: 24 }}>
-            <div className="card-header">Category Revenue Trends (30-day)</div>
+            <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Category Revenue Trends (30-day)</span>
+              <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => setShowAllCategoryTrends((prev) => !prev)}>
+                {showAllCategoryTrends ? 'Hide Zero-Revenue Categories' : 'Show All'}
+              </button>
+            </div>
             <div className="card-body" style={{ padding: 0 }}>
               <table className="data-table">
                 <thead>
                   <tr>
                     <th>Category</th>
-                    <th style={{ textAlign: 'right' }}>Revenue (Last 30d)</th>
-                    <th style={{ textAlign: 'right' }}>Revenue (Prev 30d)</th>
-                    <th style={{ textAlign: 'right' }}>Trend</th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleTrendSort('revenue_last_30d')}>
+                      Revenue (Last 30d){trendSortIcon('revenue_last_30d')}
+                    </th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleTrendSort('revenue_prev_30d')}>
+                      Revenue (Prev 30d){trendSortIcon('revenue_prev_30d')}
+                    </th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleTrendSort('trend_pct')}>
+                      Trend{trendSortIcon('trend_pct')}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {trends.category_trends.map((ct, i) => (
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600 }}>{ct.category_name}</td>
-                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>₹{ct.revenue_last_30d?.toLocaleString('en-IN')}</td>
-                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>₹{ct.revenue_prev_30d?.toLocaleString('en-IN')}</td>
-                      <td style={{
-                        textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600,
-                        color: ct.trend_pct > 0 ? 'var(--success)' : ct.trend_pct < 0 ? 'var(--danger)' : 'var(--text-muted)'
-                      }}>
-                        {ct.trend_arrow} {ct.trend_pct > 0 ? '+' : ''}{ct.trend_pct}%
+                  {categoryTrends.map((row, index) => (
+                    <tr key={index}>
+                      <td style={{ fontWeight: 600 }}>{row.category_name}</td>
+                      <td className="col-number">INR {(row.revenue_last_30d || 0).toLocaleString('en-IN')}</td>
+                      <td className="col-number">INR {(row.revenue_prev_30d || 0).toLocaleString('en-IN')}</td>
+                      <td
+                        className="col-number"
+                        style={{
+                          fontWeight: 700,
+                          color: row.trend_pct > 0 ? 'var(--success)' : row.trend_pct < 0 ? 'var(--danger)' : 'var(--text-muted)',
+                        }}
+                      >
+                        {row.trend_arrow} {row.trend_pct > 0 ? '+' : ''}{row.trend_pct}%
                       </td>
                     </tr>
                   ))}

@@ -25,6 +25,15 @@ class LoginResponse(BaseModel):
     email: str
 
 
+class RestaurantUpdateRequest(BaseModel):
+    restaurant_name: str | None = None
+    cuisine_type: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    logo_url: str | None = None
+
+
 @router.post("/login")
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     """
@@ -74,4 +83,47 @@ def get_restaurant(restaurant_id: int, db: Session = Depends(get_db)):
         "email": restaurant.email,
         "phone": restaurant.phone,
         "address": restaurant.address,
+        "logo_url": restaurant.logo_url,
+    }
+
+
+@router.patch("/me/{restaurant_id}")
+def update_restaurant(
+    restaurant_id: int,
+    body: RestaurantUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    restaurant = db.query(Restaurant).filter(
+        Restaurant.id == restaurant_id,
+        Restaurant.is_active == True,
+    ).first()
+
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+
+    if body.restaurant_name is not None:
+        restaurant.name = body.restaurant_name
+    if body.cuisine_type is not None:
+        restaurant.cuisine_type = body.cuisine_type
+    if body.email is not None:
+        restaurant.email = body.email
+    if body.phone is not None:
+        restaurant.phone = body.phone
+    if body.address is not None:
+        restaurant.address = body.address
+    if body.logo_url is not None:
+        restaurant.logo_url = body.logo_url
+
+    db.commit()
+    db.refresh(restaurant)
+
+    return {
+        "restaurant_id": restaurant.id,
+        "restaurant_name": restaurant.name,
+        "slug": restaurant.slug,
+        "cuisine_type": restaurant.cuisine_type,
+        "email": restaurant.email,
+        "phone": restaurant.phone,
+        "address": restaurant.address,
+        "logo_url": restaurant.logo_url,
     }

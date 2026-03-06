@@ -18,6 +18,7 @@ from sqlalchemy import func
 from database import get_db
 from models import MenuItem, SaleTransaction, Category
 from modules.revenue.analyzer import run_full_analysis
+from modules.revenue.analyzer import _calculate_health_score
 from modules.revenue.contribution_margin import calculate_margins
 from modules.revenue.popularity import calculate_popularity
 from modules.revenue.menu_matrix import classify_menu_matrix, get_quadrant_summary
@@ -141,6 +142,9 @@ def get_dashboard(restaurant_id: int = Query(None), db: Session = Depends(get_db
         plowhorses_count = sum(1 for m in matrix if m["quadrant"] == "plowhorse")
         puzzles_count = sum(1 for m in matrix if m["quadrant"] == "puzzle")
         dogs_count = sum(1 for m in matrix if m["quadrant"] == "dog")
+        health_score_breakdown = _calculate_health_score(
+            avg_margin, stars_count, dogs_count, total_items, hidden_stars_list
+        )
 
         # Operational metrics
         ops = calculate_operational_metrics(db)
@@ -150,8 +154,8 @@ def get_dashboard(restaurant_id: int = Query(None), db: Session = Depends(get_db
             "avg_cm_percent": round(avg_margin, 1),
             "items_at_risk_count": items_at_risk,
             "uplift_potential": round(uplift, 2),
-            "health_score": 0,
-            "health_score_breakdown": {},
+            "health_score": health_score_breakdown["score"],
+            "health_score_breakdown": health_score_breakdown,
             "total_items": total_items,
             "stars_count": stars_count,
             "plowhorses_count": plowhorses_count,
@@ -198,15 +202,19 @@ def get_menu_matrix(restaurant_id: int = Query(None), db: Session = Depends(get_
 
 
 @router.get("/hidden-stars")
-def get_hidden_stars(db: Session = Depends(get_db)):
+def get_hidden_stars(
+    restaurant_id: int = Query(None),
+    db: Session = Depends(get_db),
+):
     """
     GET /api/revenue/hidden-stars
     Returns: hidden star items with estimated_monthly_uplift, recommendation
     """
     try:
+        cache_key = f"hidden_stars_{restaurant_id}" if restaurant_id else "hidden_stars"
         return _get_or_compute(
-            "hidden_stars",
-            lambda: {"items": detect_hidden_stars(*_get_margins_popularity(db))},
+            cache_key,
+            lambda: {"items": detect_hidden_stars(*_get_margins_popularity(db, restaurant_id=restaurant_id))},
         )
     except Exception as e:
         logger.exception("Error detecting hidden stars")
@@ -214,15 +222,20 @@ def get_hidden_stars(db: Session = Depends(get_db)):
 
 
 @router.get("/risks")
-def get_risk_items(db: Session = Depends(get_db)):
+def get_risk_items(
+    restaurant_id: int = Query(None),
+    db: Session = Depends(get_db),
+):
     """
     GET /api/revenue/risks
     Returns: risk items with risk_score, volume, cm_percent
     Risk = high sales volume + low contribution margin
     """
     try:
+        cache_key = f"risk_items_{restaurant_id}" if restaurant_id else "risk_items"
+
         def _compute():
-            margins, popularity = _get_margins_popularity(db)
+            margins, popularity = _get_margins_popularity(db, restaurant_id=restaurant_id)
             matrix = classify_menu_matrix(margins, popularity)
 
             risk_items = []
@@ -245,7 +258,7 @@ def get_risk_items(db: Session = Depends(get_db)):
             risk_items.sort(key=lambda x: x["risk_score"], reverse=True)
             return {"items": risk_items, "count": len(risk_items)}
 
-        return _get_or_compute("risk_items", _compute)
+        return _get_or_compute(cache_key, _compute)
     except Exception as e:
         logger.exception("Error computing risk items")
         raise HTTPException(status_code=500, detail=f"Risk analysis failed: {e}")
@@ -295,15 +308,19 @@ def retrain_combos(
 
 
 @router.get("/price-recommendations")
-def get_price_recommendations(db: Session = Depends(get_db)):
+def get_price_recommendations(
+    restaurant_id: int = Query(None),
+    db: Session = Depends(get_db),
+):
     """
     GET /api/revenue/price-recommendations
     Returns: items with current_price, recommended_price, reason
     """
     try:
+        cache_key = f"price_recommendations_{restaurant_id}" if restaurant_id else "price_recommendations"
         return _get_or_compute(
-            "price_recommendations",
-            lambda: {"recommendations": generate_price_recommendations(*_get_margins_popularity(db))},
+            cache_key,
+            lambda: {"recommendations": generate_price_recommendations(*_get_margins_popularity(db, restaurant_id=restaurant_id))},
         )
     except Exception as e:
         logger.exception("Error generating price recommendations")
@@ -311,15 +328,20 @@ def get_price_recommendations(db: Session = Depends(get_db)):
 
 
 @router.get("/category-breakdown")
-def get_category_breakdown(db: Session = Depends(get_db)):
+def get_category_breakdown(
+    restaurant_id: int = Query(None),
+    db: Session = Depends(get_db),
+):
     """
     GET /api/revenue/category-breakdown
     Returns: per-category stats (item_count, avg_cm_pct, total_revenue)
     """
     try:
+        cache_key = f"category_breakdown_{restaurant_id}" if restaurant_id else "category_breakdown"
+
         def _compute():
             # Single query: aggregate revenue and units per category
-            cat_stats = (
+            q = (
                 db.query(
                     Category.id,
                     Category.name,
@@ -333,9 +355,11 @@ def get_category_breakdown(db: Session = Depends(get_db)):
                 .join(MenuItem, MenuItem.category_id == Category.id)
                 .outerjoin(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
                 .filter(Category.is_active == True, MenuItem.is_available == True)
-                .group_by(Category.id, Category.name, Category.name_hi)
-                .all()
             )
+            if restaurant_id:
+                q = q.filter(MenuItem.restaurant_id == restaurant_id)
+
+            cat_stats = q.group_by(Category.id, Category.name, Category.name_hi).all()
 
             breakdown = []
             for row in cat_stats:
@@ -356,7 +380,7 @@ def get_category_breakdown(db: Session = Depends(get_db)):
             breakdown.sort(key=lambda x: x["total_revenue"], reverse=True)
             return {"categories": breakdown}
 
-        return _get_or_compute("category_breakdown", _compute)
+        return _get_or_compute(cache_key, _compute)
     except Exception as e:
         logger.exception("Error computing category breakdown")
         raise HTTPException(status_code=500, detail=f"Category breakdown failed: {e}")
