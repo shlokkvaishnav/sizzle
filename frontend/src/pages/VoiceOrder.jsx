@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from 'motion/react'
 import { StaggerReveal, staggerContainer, staggerItem } from '../utils/animations'
 import { Trash2, ShoppingCart, ClipboardList, CheckCircle } from 'lucide-react'
 import { buildUpsellCandidates } from '../utils/revenueInsights'
+import { VOICE_AUTO_LISTEN_DELAY_MS } from '../config'
 
 function generateSessionId() {
   return 'sess-' + Math.random().toString(36).slice(2, 10)
@@ -50,7 +51,7 @@ export default function VoiceOrder() {
       setIsSpeaking(false)
       // Auto-listen: restart recording after TTS finishes (skip after CONFIRM)
       if (autoListenRef.current && lastIntentRef.current !== 'CONFIRM') {
-        setTimeout(() => recorderRef.current?.startRecording(), 600)
+        setTimeout(() => recorderRef.current?.startRecording(), VOICE_AUTO_LISTEN_DELAY_MS)
       }
     }
     audio.onerror = () => {

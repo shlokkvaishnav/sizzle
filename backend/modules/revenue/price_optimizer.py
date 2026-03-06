@@ -7,12 +7,20 @@ category benchmarks.
 """
 
 
+import os
+
+_DEFAULT_TARGET_MARGIN = float(os.getenv("PRICE_OPT_TARGET_MARGIN", "65.0"))
+_DEFAULT_MAX_INCREASE = float(os.getenv("PRICE_OPT_MAX_INCREASE", "12.0"))
+_DEFAULT_MAX_DECREASE = float(os.getenv("PRICE_OPT_MAX_DECREASE", "8.0"))
+_ROUND_STEP = int(os.getenv("PRICE_OPT_ROUND_STEP", "5"))
+
+
 def generate_price_recommendations(
     margins: list[dict],
     popularity: list[dict],
-    target_margin_pct: float = 65.0,
-    max_increase_pct: float = 12.0,
-    max_decrease_pct: float = 8.0,
+    target_margin_pct: float = _DEFAULT_TARGET_MARGIN,
+    max_increase_pct: float = _DEFAULT_MAX_INCREASE,
+    max_decrease_pct: float = _DEFAULT_MAX_DECREASE,
 ) -> list[dict]:
     """
     Generate price recommendations based on margin and popularity.
@@ -172,5 +180,5 @@ def _build_rec(
 
 
 def _round_price(price: float) -> float:
-    """Round to nearest ₹5 for clean pricing."""
-    return round(price / 5) * 5
+    """Round to nearest step (default ₹5) for clean pricing."""
+    return round(price / _ROUND_STEP) * _ROUND_STEP

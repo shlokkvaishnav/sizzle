@@ -182,10 +182,14 @@ async def lifespan(app: FastAPI):
     logger.info("Server shutting down...")
 
 
+_APP_TITLE = os.getenv("APP_TITLE", "Sizzle AI Copilot")
+_APP_DESCRIPTION = os.getenv("APP_DESCRIPTION", "Restaurant Revenue Intelligence & Voice Ordering")
+_APP_VERSION = os.getenv("APP_VERSION", "0.2.0")
+
 app = FastAPI(
-    title="Petpooja AI Copilot",
-    description="Restaurant Revenue Intelligence & Voice Ordering — Supabase PostgreSQL backend",
-    version="0.2.0",
+    title=_APP_TITLE,
+    description=_APP_DESCRIPTION,
+    version=_APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -293,8 +297,8 @@ def health():
     """Health check endpoint with TTS + LLM status."""
     result = {
         "status": "healthy",
-        "service": "petpooja-ai-copilot",
-        "version": "0.2.0",
+        "service": "sizzle-ai-copilot",
+        "version": _APP_VERSION,
         "pipeline_loaded": getattr(app.state, "voice_pipeline", None) is not None,
     }
 
@@ -337,4 +341,6 @@ def health_root():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    _host = os.getenv("HOST", "0.0.0.0")
+    _port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("main:app", host=_host, port=_port, reload=True)

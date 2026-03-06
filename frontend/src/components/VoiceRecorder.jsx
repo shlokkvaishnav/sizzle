@@ -1,11 +1,18 @@
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
 import { Mic } from 'lucide-react'
+import {
+  VOICE_VISUALIZER_BARS,
+  VOICE_SPEECH_THRESHOLD,
+  VOICE_SILENCE_TIMEOUT_MS,
+  VOICE_MAX_WAIT_NO_SPEECH_MS,
+  VOICE_MAX_RECORD_MS,
+} from '../config'
 
-const VISUALIZER_BARS = 48
-const SPEECH_THRESHOLD = 12       // avg freq-bin value above this = speech
-const SILENCE_TIMEOUT_MS = 2500   // ms of post-speech silence → auto-stop
-const MAX_WAIT_NO_SPEECH_MS = 6000 // ms with no speech → auto-stop
-const MAX_RECORD_MS = 15000       // hard cap on recording length
+const VISUALIZER_BARS = VOICE_VISUALIZER_BARS
+const SPEECH_THRESHOLD = VOICE_SPEECH_THRESHOLD
+const SILENCE_TIMEOUT_MS = VOICE_SILENCE_TIMEOUT_MS
+const MAX_WAIT_NO_SPEECH_MS = VOICE_MAX_WAIT_NO_SPEECH_MS
+const MAX_RECORD_MS = VOICE_MAX_RECORD_MS
 
 const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
   const { onRecorded, onStartRecording, autoListen, onAutoListenSilence } = props

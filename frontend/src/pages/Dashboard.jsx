@@ -55,11 +55,11 @@ function trendTone(value) {
 }
 
 function barColorByRank(index, total) {
-  if (total <= 1) return '#f59e0b'
+  if (total <= 1) return 'var(--warning)'
   const ratio = index / (total - 1)
-  if (ratio < 0.33) return '#2A7A50'
-  if (ratio < 0.66) return '#C07A20'
-  return '#8C2A2A'
+  if (ratio < 0.33) return 'var(--success)'
+  if (ratio < 0.66) return 'var(--warning)'
+  return 'var(--danger)'
 }
 
 function Sparkline({ data, color }) {

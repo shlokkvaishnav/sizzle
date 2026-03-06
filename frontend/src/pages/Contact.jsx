@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import { useTranslation } from '../context/LanguageContext'
+import { CONTACT_EMAIL, CONTACT_PHONE, CONTACT_LOCATION } from '../config'
 
 export default function Contact() {
     const navigate = useNavigate()
@@ -39,7 +40,7 @@ export default function Contact() {
                                 </div>
                                 <div>
                                     <span className="ct-detail-label">Email</span>
-                                    <span className="ct-detail-value">hello@sizzle.ai</span>
+                                    <span className="ct-detail-value">{CONTACT_EMAIL}</span>
                                 </div>
                             </div>
                             <div className="ct-detail-item">
@@ -50,7 +51,7 @@ export default function Contact() {
                                 </div>
                                 <div>
                                     <span className="ct-detail-label">Phone</span>
-                                    <span className="ct-detail-value">+91 98765 43210</span>
+                                    <span className="ct-detail-value">{CONTACT_PHONE}</span>
                                 </div>
                             </div>
                             <div className="ct-detail-item">
@@ -62,7 +63,7 @@ export default function Contact() {
                                 </div>
                                 <div>
                                     <span className="ct-detail-label">Office</span>
-                                    <span className="ct-detail-value">Pune, Maharashtra, India</span>
+                                    <span className="ct-detail-value">{CONTACT_LOCATION}</span>
                                 </div>
                             </div>
                         </div>

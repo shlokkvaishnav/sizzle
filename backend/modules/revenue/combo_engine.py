@@ -45,18 +45,26 @@ _COMBO_CATEGORY_GROUPS = {
     "dessert": {"Desserts", "Sweets"},
 }
 
+_COMBO_MIN_SUPPORT = float(os.getenv("COMBO_MIN_SUPPORT", "0.04"))
+_COMBO_MIN_CONFIDENCE = float(os.getenv("COMBO_MIN_CONFIDENCE", "0.30"))
+_COMBO_MIN_LIFT = float(os.getenv("COMBO_MIN_LIFT", "1.2"))
+_COMBO_MAX_COMBOS = int(os.getenv("COMBO_MAX_COMBOS", "20"))
+_COMBO_WINDOW_SIZE = int(os.getenv("COMBO_WINDOW_SIZE", "500"))
+_COMBO_UPDATE_THRESHOLD = int(os.getenv("COMBO_UPDATE_THRESHOLD", "50"))
+_COMBO_DEFAULT_DISCOUNT_PCT = float(os.getenv("COMBO_DEFAULT_DISCOUNT_PCT", "10.0"))
+
 logger = logging.getLogger("petpooja.revenue.combo")
 
 
 def generate_combos(
     db: Session,
-    min_support: float = 0.04,
-    min_confidence: float = 0.30,
-    min_lift: float = 1.2,
-    max_combos: int = 20,
-    window_size: int = 500,
-    update_threshold: int = 50,
-    target_discount_pct: float = 10.0,
+    min_support: float = _COMBO_MIN_SUPPORT,
+    min_confidence: float = _COMBO_MIN_CONFIDENCE,
+    min_lift: float = _COMBO_MIN_LIFT,
+    max_combos: int = _COMBO_MAX_COMBOS,
+    window_size: int = _COMBO_WINDOW_SIZE,
+    update_threshold: int = _COMBO_UPDATE_THRESHOLD,
+    target_discount_pct: float = _COMBO_DEFAULT_DISCOUNT_PCT,
     force_retrain: bool = False,
 ) -> list[dict]:
     """

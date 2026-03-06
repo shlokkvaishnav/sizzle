@@ -7,11 +7,17 @@ with the right promotion.
 """
 
 
+import os
+
+_DEFAULT_CM_PERCENTILE = float(os.getenv("HIDDEN_STARS_CM_PERCENTILE", "0.7"))
+_DEFAULT_POP_PERCENTILE = float(os.getenv("HIDDEN_STARS_POP_PERCENTILE", "0.3"))
+
+
 def detect_hidden_stars(
     margins: list[dict],
     popularity: list[dict],
-    cm_percentile: float = 0.7,
-    pop_percentile: float = 0.3,
+    cm_percentile: float = _DEFAULT_CM_PERCENTILE,
+    pop_percentile: float = _DEFAULT_POP_PERCENTILE,
 ) -> list[dict]:
     """
     Detect hidden stars: items with high contribution margin

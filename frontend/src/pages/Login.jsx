@@ -5,12 +5,15 @@ import { motion } from 'motion/react'
 import { useAuth } from '../context/AuthContext'
 import { useTranslation } from '../context/LanguageContext'
 import { loginApi } from '../api/client'
+import { DEMO_MODE } from '../config'
 import './Login.css'
 
-const DEMO_ACCOUNTS = [
-    { label: 'Restaurant 1', name: 'Spice Craft', cuisine: 'Indian Multi-Cuisine', email: 'admin@spicecraft.in', password: 'spicecraft123', emoji: '🍛' },
-    { label: 'Restaurant 2', name: 'Dragon Wok', cuisine: 'Chinese & Pan-Asian', email: 'admin@dragonwok.in', password: 'dragon123', emoji: '🐉' },
-]
+const DEMO_ACCOUNTS = DEMO_MODE
+    ? [
+        { label: 'Restaurant 1', name: 'Spice Craft', cuisine: 'Indian Multi-Cuisine', email: 'admin@spicecraft.in', password: 'spicecraft123', emoji: '🍛' },
+        { label: 'Restaurant 2', name: 'Dragon Wok', cuisine: 'Chinese & Pan-Asian', email: 'admin@dragonwok.in', password: 'dragon123', emoji: '🐉' },
+    ]
+    : []
 
 const languages = [
     { code: 'en', label: 'English' },

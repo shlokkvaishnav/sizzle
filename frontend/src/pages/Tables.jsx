@@ -12,10 +12,10 @@ import {
 } from '../api/client'
 
 const statusStyles = {
-  empty: { color: '#2A7A50', bg: 'var(--success-subtle)', label: 'Available' },
-  occupied: { color: '#C07A20', bg: 'var(--warning-subtle)', label: 'Occupied' },
-  reserved: { color: '#2A5A8C', bg: 'var(--info-subtle)', label: 'Reserved' },
-  cleaning: { color: '#7A7A84', bg: 'rgba(122, 122, 132, 0.15)', label: 'Needs Cleaning' },
+  empty: { color: 'var(--success)', bg: 'var(--success-subtle)', label: 'Available' },
+  occupied: { color: 'var(--warning)', bg: 'var(--warning-subtle)', label: 'Occupied' },
+  reserved: { color: 'var(--info)', bg: 'var(--info-subtle)', label: 'Reserved' },
+  cleaning: { color: 'var(--text-muted)', bg: 'rgba(122, 122, 132, 0.15)', label: 'Needs Cleaning' },
 }
 
 function formatOrderRef(table) {

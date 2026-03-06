@@ -1,5 +1,7 @@
-const TARGET_UPSELL_CM = 65
-const MIN_ORDER_HISTORY = 30
+import { TARGET_UPSELL_CM as _TARGET_CM, MIN_ORDER_HISTORY as _MIN_HISTORY } from '../config'
+
+const TARGET_UPSELL_CM = _TARGET_CM
+const MIN_ORDER_HISTORY = _MIN_HISTORY
 
 function num(value, fallback = 0) {
   const n = Number(value)
