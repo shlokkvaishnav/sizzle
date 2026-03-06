@@ -2,10 +2,14 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import LightRays from '../components/LightRays'
 import { motion } from 'motion/react'
+import { useAuth } from '../context/AuthContext'
+import { useTranslation } from '../context/LanguageContext'
 import './Login.css'
 
 export default function Login() {
     const navigate = useNavigate()
+    const { login } = useAuth()
+    const { t } = useTranslation()
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [loading, setLoading] = useState(false)
@@ -15,7 +19,7 @@ export default function Login() {
     const handleLogin = async (e) => {
         e.preventDefault()
         if (!email || !password) {
-            setError('Please fill in all fields.')
+            setError(t('login_error_fields'))
             return
         }
         setError('')
@@ -23,6 +27,7 @@ export default function Login() {
 
         setTimeout(() => {
             setLoading(false)
+            login()
             navigate('/dashboard')
         }, 1200)
     }
@@ -38,7 +43,7 @@ export default function Login() {
                 transition={{ duration: 0.5, delay: 0.3 }}
             >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5" /><path d="M12 19l-7-7 7-7" /></svg>
-                Back to Home
+                {t('login_back')}
             </motion.a>
 
             {/* The interactive LightRays page background */}
@@ -91,7 +96,7 @@ export default function Login() {
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.5, duration: 0.5 }}
                     >
-                        Sizzle AI — Your restaurant copilot.
+                        {t('login_left_sub')}
                     </motion.p>
                     <motion.h2
                         className="login-left-title"
@@ -99,8 +104,8 @@ export default function Login() {
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.7, duration: 0.6 }}
                     >
-                        Manage<br />
-                        your restaurant
+                        {t('login_left_title_1')}<br />
+                        {t('login_left_title_2')}
                     </motion.h2>
                 </div>
 
@@ -116,7 +121,7 @@ export default function Login() {
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
                             </svg>
-                            Sign Up
+                            {t('login_signup')}
                         </a>
                     </div>
 
@@ -132,7 +137,7 @@ export default function Login() {
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ delay: 0.5, duration: 0.4 }}
                         >
-                            Sign In
+                            {t('login_signin')}
                         </motion.h1>
 
                         <form onSubmit={handleLogin}>
@@ -155,7 +160,7 @@ export default function Login() {
                                 <input
                                     type="text"
                                     className="login-input"
-                                    placeholder="Email or Username"
+                                    placeholder={t('login_email_placeholder')}
                                     value={email}
                                     onChange={(e) => setEmail(e.target.value)}
                                     autoComplete="username"
@@ -171,7 +176,7 @@ export default function Login() {
                                 <input
                                     type={showPassword ? "text" : "password"}
                                     className="login-input"
-                                    placeholder="Password"
+                                    placeholder={t('login_password_placeholder')}
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
                                     autoComplete="current-password"
@@ -197,7 +202,7 @@ export default function Login() {
                                 animate={{ opacity: 1 }}
                                 transition={{ delay: 0.8, duration: 0.4 }}
                             >
-                                Forgot password?
+                                {t('login_forgot')}
                             </motion.a>
 
                             <motion.button
@@ -210,10 +215,10 @@ export default function Login() {
                                 whileHover={{ scale: 1.02, y: -2 }}
                                 whileTap={{ scale: 0.98 }}
                             >
-                                {loading ? 'Signing in...' : (
+                                {loading ? t('login_signing_in') : (
                                     <>
                                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 8l4 4-4 4" /><path d="M4 12h14" /></svg>
-                                        Sign In
+                                        {t('login_submit')}
                                     </>
                                 )}
                             </motion.button>
