@@ -21,6 +21,10 @@ start "Pet Pooja - Frontend" cmd /k "npm run dev"
 
 cd /d "%~dp0"
 
+:: Wait for Vite to initialize, then open the browser
+timeout /t 3 /nobreak >nul
+start http://localhost:3000/
+
 echo.
 echo ========================================
 echo   Both services are starting!

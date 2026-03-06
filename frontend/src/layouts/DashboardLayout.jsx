@@ -38,7 +38,7 @@ const navGroups = [
 export default function DashboardLayout() {
   const [open, setOpen] = useState(true)
   const navigate = useNavigate()
-  const { logout } = useAuth()
+  const { logout, restaurant } = useAuth()
 
   return (
     <div className="app-layout">
@@ -53,7 +53,9 @@ export default function DashboardLayout() {
         <div className="sidebar-brand">
           <div className="sidebar-brand-row">
             <div className="sidebar-logo">
-              <span className="sidebar-logo-letter">S</span>
+              <span className="sidebar-logo-letter">
+                {(restaurant?.restaurant_name || restaurant?.name || 'R').charAt(0).toUpperCase()}
+              </span>
             </div>
             {open && (
               <motion.div
@@ -62,8 +64,15 @@ export default function DashboardLayout() {
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.2 }}
               >
-                <h2>Sizzle</h2>
-                <p>Restaurant AI Copilot</p>
+                <div style={{
+                  fontSize: '9px',
+                  fontWeight: 800,
+                  letterSpacing: '0.15em',
+                  textTransform: 'uppercase',
+                  color: 'var(--accent)',
+                  marginBottom: '2px'
+                }}>Sizzle</div>
+                <h2 style={{ fontSize: '16px' }}>{restaurant?.restaurant_name || restaurant?.name || 'Restaurant'}</h2>
               </motion.div>
             )}
           </div>

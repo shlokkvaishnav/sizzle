@@ -47,7 +47,9 @@
     z-index: 10;
     width: 100%;
     max-width: 1100px;
-    min-height: 700px;
+    height: 90vh;
+    max-height: 800px;
+    min-height: 600px;
     display: flex;
     border-radius: 40px;
     box-shadow: 0 40px 100px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.1);
@@ -106,7 +108,7 @@
     background: #0d0b0a;
     display: flex;
     flex-direction: column;
-    padding: 40px 60px;
+    padding: 30px 60px;
     position: relative;
 }
 
@@ -115,7 +117,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 80px;
+    margin-bottom: 40px;
 }
 
 .login-brand {
@@ -174,15 +176,15 @@
 
 .login-form-area h1 {
     font-family: var(--font-display), serif;
-    font-size: 42px;
+    font-size: 36px;
     font-weight: 900;
     color: #fff;
     letter-spacing: -0.04em;
-    margin-bottom: 40px;
+    margin-bottom: 24px;
 }
 
 .login-form-group {
-    margin-bottom: 24px;
+    margin-bottom: 16px;
     position: relative;
 }
 
@@ -229,8 +231,8 @@
     font-weight: 600;
     color: var(--accent);
     text-decoration: none;
-    margin-top: 12px;
-    margin-bottom: 40px;
+    margin-top: 8px;
+    margin-bottom: 24px;
     transition: opacity 0.2s;
 }
 
