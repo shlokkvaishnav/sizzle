@@ -130,60 +130,33 @@ export default function Dashboard() {
 
   return (
     <motion.div
+      className="app-page"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35 }}
     >
-      {/* Page Header */}
       <motion.div
-        className="page-header"
-        initial={{ opacity: 0, x: -20 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ duration: 0.5 }}
-      >
-        <h1>Revenue Overview</h1>
-        <p>Last updated — {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</p>
-      </motion.div>
-
-      {/* Zone 1: Hero Strip */}
-      <motion.div
-        style={{
-          background: 'linear-gradient(135deg, var(--bg-surface) 0%, var(--bg-base) 100%)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 'var(--radius-lg)',
-          padding: 'var(--space-8)',
-          marginBottom: 'var(--space-6)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 'var(--space-6)',
-        }}
+        className="app-hero"
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1, duration: 0.5 }}
       >
         <div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: 28, fontWeight: 900, color: 'var(--text-primary)', marginBottom: 4 }}>
-            Sizzle Restaurant
-          </div>
-          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-            {new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-          </div>
+          <div className="app-hero-eyebrow">Overview</div>
+          <h1 className="app-hero-title">Revenue Overview</h1>
+          <p className="app-hero-sub">
+            Last updated - {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+          </p>
         </div>
-        <div style={{ display: 'flex', gap: 'var(--space-10)', flexWrap: 'wrap' }}>
+        <div className="app-hero-metrics">
           {[
             { label: 'Total Revenue', value: formatRupeesShort(metrics.total_revenue) },
             { label: 'Orders (30d)', value: metrics.total_orders || 0 },
             { label: 'Menu Health', value: metrics.health_score || 0 },
           ].map((item) => (
-            <div key={item.label} style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-secondary)', marginBottom: 4 }}>
-                {item.label}
-              </div>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 28, fontWeight: 600, color: 'var(--text-primary)' }}>
-                {item.value}
-              </div>
+            <div key={item.label} className="app-kpi">
+              <div className="app-kpi-label">{item.label}</div>
+              <div className="app-kpi-value">{item.value}</div>
             </div>
           ))}
         </div>

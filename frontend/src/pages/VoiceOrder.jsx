@@ -73,10 +73,23 @@ export default function VoiceOrder() {
 
   return (
     <motion.div
+      className="app-page"
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
     >
+      <motion.div
+        className="app-hero"
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+      >
+        <div>
+          <div className="app-hero-eyebrow">Operations</div>
+          <h1 className="app-hero-title">Voice Ordering</h1>
+          <p className="app-hero-sub">Live voice-to-order pipeline with multi-turn context.</p>
+        </div>
+      </motion.div>
       <motion.div
         className="page-header"
         initial={{ opacity: 0, x: -20 }}
@@ -336,7 +349,7 @@ export default function VoiceOrder() {
                   {result.upsell_suggestions.map((u, idx) => (
                     <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--border-subtle)' }}>
                       <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{u.name || u.suggestion_text}</span>
-                      {u.reason && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>— {u.reason}</span>}
+                      {u.reason && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>- {u.reason}</span>}
                       {u.selling_price && <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', fontWeight: 600, marginLeft: 'auto' }}>₹{u.selling_price}</span>}
                     </div>
                   ))}
