@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from database import engine, Base, SessionLocal, get_db
 from api.routes_revenue import router as revenue_router
 from api.routes_ops import router as ops_router
-from api.routes_voice import router as voice_router
+from api.routes_voice import router as voice_router, voice_stream as _ws_voice_stream
 from api.routes_auth import router as auth_router
 from api.auth import require_auth, authenticate_staff
 from api.rate_limit import rate_limit_middleware
@@ -257,12 +257,17 @@ app.include_router(
     tags=["Revenue"],
     dependencies=[Depends(require_auth)],
 )
+# Voice routes: REST endpoints are auth-gated; the /stream WebSocket is
+# registered directly on app WITHOUT the auth dependency because browsers
+# cannot send Authorization headers on WS upgrade requests.
+# The /stream endpoint handles its own auth via a query-param token.
 app.include_router(
     voice_router,
     prefix="/api/voice",
     tags=["Voice"],
     dependencies=[Depends(require_auth)],
 )
+app.websocket("/api/voice/stream")(_ws_voice_stream)
 app.include_router(
     ops_router,
     prefix="/api/ops",

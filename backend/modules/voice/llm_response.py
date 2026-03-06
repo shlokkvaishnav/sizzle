@@ -44,11 +44,12 @@ class LLMResponseGenerator:
             return False
 
         items = pipeline_result.get("items", [])
-        intent = pipeline_result.get("intent", "")
 
+        # Only call the LLM for large orders where listing items individually
+        # would sound robotic. For QUERY intent we use templates — the LLM
+        # is too slow (1.5s timeout) and often hallucinates menu details
+        # it doesn't actually have in context.
         if len(items) >= cfg.LLM_MIN_ITEMS_FOR_SUMMARY:
-            return True
-        if intent == "QUERY":
             return True
         return False
 
@@ -185,6 +186,9 @@ class LLMResponseGenerator:
                 )
             return self._t_confirm(lang, total)
 
+        if intent == "QUERY":
+            return self._t_query(lang)
+
         if disambiguation and len(disambiguation) <= 2:
             entry = disambiguation[0]
             alts = entry.get("alternatives", [])
@@ -273,6 +277,17 @@ class LLMResponseGenerator:
             "gu": f"તમારો ઓર્ડર કન્ફર્મ થયો. કુલ {total_str} રૂપિયા છે અને મેં kitchen માં મોકલી દીધો.",
             "mr": f"तुमचा ऑर्डर confirm झाला. एकूण {total_str} रुपये आहेत आणि मी kitchen मध्ये पाठवला आहे.",
             "kn": f"ನಿಮ್ಮ order confirm ಆಗಿದೆ. ಒಟ್ಟು {total_str} rupees, ಮತ್ತು ನಾನು kitchen ಗೆ ಕಳಿಸಿದ್ದೇನೆ.",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_query(lang: str) -> str:
+        templates = {
+            "en": "I can take your order! Just tell me what you'd like to have and I'll add it.",
+            "hi": "Main aapka order le sakta hoon! Bas bataiye kya khana chahenge.",
+            "gu": "હું તમારો ઓર્ડર લઈ શકું! બસ કહો તમને શું જોઈએ.",
+            "mr": "मी तुमचा ऑर्डर घेऊ शकतो! फक्त सांगा काय हवे आहे.",
+            "kn": "ನಾನು ನಿಮ್ಮ order ತೆಗೆದುಕೊಳ್ಳಬಲ್ಲೆ! ಏನು ಬೇಕು ಎಂದು ಹೇಳಿ.",
         }
         return templates.get(lang, templates["en"])
 

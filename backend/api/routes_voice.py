@@ -3,6 +3,17 @@ routes_voice.py — Voice Ordering API Endpoints
 ================================================
 /api/voice/* — Transcription, full pipeline processing,
 order confirmation, order history, and WebSocket streaming.
+
+Auth note for /stream (WebSocket)
+----------------------------------
+Browsers CANNOT send custom HTTP headers (e.g. Authorization: Bearer ...)
+on WebSocket upgrade requests — it is a browser security restriction.
+Therefore the /stream endpoint handles auth itself: when AUTH_ENABLED=true
+it reads an optional JWT from the `token` query parameter:
+
+  ws://host/api/voice/stream?token=<jwt>
+
+When AUTH_ENABLED=false (development default) the check is skipped.
 """
 
 import asyncio
@@ -17,6 +28,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
+from api.auth import AUTH_ENABLED, verify_token
 from api.deps import get_voice_pipeline
 from database import get_db
 from models import Order
@@ -458,10 +470,17 @@ class _AudioBuffer:
         return self._total_bytes > 0
 
 
-@router.websocket("/stream")
-async def voice_stream(websocket: WebSocket):
+
+async def voice_stream(
+    websocket: WebSocket,
+    token: str | None = Query(None),
+):
     """
     WebSocket endpoint for real-time voice streaming.
+
+    Auth: browsers cannot set Authorization headers on WS upgrades.
+    When AUTH_ENABLED=true, pass JWT as a query param: ?token=<jwt>.
+    When AUTH_ENABLED=false (dev default), no auth is required.
 
     Client sends:
     - Binary frames: raw audio chunks (PCM/WebM, ~250ms each)
@@ -477,7 +496,25 @@ async def voice_stream(websocket: WebSocket):
         {"type": "tts_chunk", "audio_b64": "...", "is_last": true/false}
         {"type": "error", "detail": "..."}
     """
+    # ── WebSocket-compatible auth check ──────────────────────────────────────
+    # Must accept() BEFORE sending any error response (WS protocol requirement).
     await websocket.accept()
+
+    if AUTH_ENABLED:
+        if not token:
+            await websocket.send_json({
+                "type": "error",
+                "detail": "Authentication required. Pass JWT as ?token=... query param.",
+            })
+            await websocket.close(code=4401)
+            return
+        try:
+            verify_token(token)
+        except HTTPException as exc:
+            await websocket.send_json({"type": "error", "detail": exc.detail})
+            await websocket.close(code=4401)
+            return
+
     logger.info("WebSocket voice stream connected")
 
     # Session config
@@ -570,11 +607,19 @@ async def _process_ws_audio(
     language: str = None,
     restaurant_id: int = None,
 ):
-    """Process accumulated audio buffer and send results back via WebSocket."""
+    """
+    Process accumulated audio buffer and stream results back via WebSocket.
+
+    Optimized pipeline:
+    1. Run STT + NLP pipeline in thread pool (CPU-bound)
+    2. Send pipeline_result to client immediately
+    3. Generate spoken text (LLM/template) — fast, in async context
+    4. Stream TTS audio chunks to client AS they are produced by edge-tts
+       Client starts playing the first chunk ~500ms before synthesis is complete.
+    """
     if not audio_data:
         return
 
-    # Save to temp file for Whisper
     suffix = ".webm"
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     try:
@@ -582,14 +627,14 @@ async def _process_ws_audio(
         tmp.flush()
         tmp.close()
 
-        # Send partial transcript indicator
+        # ── Step 1: Send "thinking" indicator ────────────────────────────────
         await websocket.send_json({
             "type": "partial_transcript",
             "text": "...",
             "is_final": False,
         })
 
-        # Run pipeline in thread pool (Whisper + NLP is CPU-bound)
+        # ── Step 2: Run STT + NLP pipeline (CPU-bound → thread pool) ─────────
         result = await asyncio.to_thread(
             pipeline.process_audio,
             tmp.name,
@@ -598,7 +643,7 @@ async def _process_ws_audio(
             restaurant_id=restaurant_id,
         )
 
-        # Send final transcript
+        # ── Step 3: Send transcript + full pipeline result immediately ────────
         await websocket.send_json({
             "type": "final_transcript",
             "text": result.get("transcript", ""),
@@ -607,28 +652,86 @@ async def _process_ws_audio(
             "confidence": result.get("transcription_confidence", 0.0),
         })
 
-        # Send full pipeline result
         await websocket.send_json({
             "type": "pipeline_result",
             **result,
         })
 
-        # Stream TTS response for every conversational turn, not only item-add turns.
+        # ── Step 4: Stream TTS audio chunks in real-time ─────────────────────
+        # Client begins playback on first chunk — no wait for full synthesis.
         if cfg.TTS_ENABLED:
             try:
                 from modules.voice.tts import tts_orchestrator
+                from modules.voice.tts_engine_indic import indic_engine
+                from modules.voice.llm_response import llm_generator
+                from modules.voice import tts_normalizer
+
                 detected_lang = result.get("detected_language", "en")
-                tts_result = await tts_orchestrator.get_audio_response(result, detected_lang)
-                if tts_result.get("audio_b64"):
+
+                # 4a. Generate spoken text (fast — LLM/template, same as before)
+                spoken_text = await llm_generator.get_response_text(result, detected_lang)
+                if not spoken_text:
+                    raise ValueError("No spoken text generated")
+
+                normalized_text = tts_normalizer.normalize(spoken_text, detected_lang, result)
+
+                # 4b. Check if engine ready
+                if not indic_engine.is_ready:
+                    indic_engine.warmup()
+
+                if indic_engine.is_ready:
+                    # 4c. STREAM — yield each TTS chunk as edge-tts produces it
+                    chunk_index = 0
+                    accumulated = []
+
+                    async for chunk_bytes, is_sentinel in indic_engine.synthesize_streaming(
+                        normalized_text, detected_lang
+                    ):
+                        if is_sentinel:
+                            # Final sentinel — send is_last=True with empty audio to signal end
+                            await websocket.send_json({
+                                "type": "tts_chunk",
+                                "audio_b64": "",
+                                "spoken_text": spoken_text if chunk_index == 0 else None,
+                                "language": detected_lang,
+                                "is_last": True,
+                                "chunk_index": chunk_index,
+                            })
+                            break
+
+                        if not chunk_bytes:
+                            continue
+
+                        import base64
+                        audio_b64 = base64.b64encode(chunk_bytes).decode("utf-8")
+                        accumulated.append(chunk_bytes)
+
+                        await websocket.send_json({
+                            "type": "tts_chunk",
+                            "audio_b64": audio_b64,
+                            "spoken_text": spoken_text if chunk_index == 0 else None,
+                            "language": detected_lang,
+                            "is_last": False,
+                            "chunk_index": chunk_index,
+                        })
+                        chunk_index += 1
+
+                    logger.info(
+                        "TTS streamed %d chunks for '%s' (%s)",
+                        chunk_index, spoken_text[:40], detected_lang,
+                    )
+                else:
+                    # Engine not ready — send text only, client uses browser TTS
                     await websocket.send_json({
                         "type": "tts_chunk",
-                        "audio_b64": tts_result["audio_b64"],
-                        "spoken_text": tts_result["spoken_text"],
-                        "language": tts_result["language"],
+                        "audio_b64": None,
+                        "spoken_text": spoken_text,
+                        "language": detected_lang,
                         "is_last": True,
                     })
+
             except Exception as e:
-                logger.warning("WebSocket TTS failed: %s", e)
+                logger.warning("WebSocket TTS streaming failed: %s", e)
 
     except Exception as e:
         logger.exception("WebSocket audio processing failed")
@@ -638,3 +741,4 @@ async def _process_ws_audio(
         })
     finally:
         Path(tmp.name).unlink(missing_ok=True)
+

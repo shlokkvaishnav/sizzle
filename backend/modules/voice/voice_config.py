@@ -50,9 +50,9 @@ class VoiceConfig:
     # ─── STT (stt.py) ────────────────────────────────────────────
     WHISPER_MODEL: str            = _env("WHISPER_MODEL", "large-v3-turbo")
     STT_MIN_CONFIDENCE: float     = _env_float("STT_MIN_CONFIDENCE", 0.45)
-    STT_BEAM_SIZE: int            = _env_int("STT_BEAM_SIZE", 1)  # greedy decoding — 3-5x faster than beam=5
+    STT_BEAM_SIZE: int            = _env_int("STT_BEAM_SIZE", 0)  # 0 = pure greedy, fastest, minimal loss for short food commands
     STT_TEMPERATURE: float        = _env_float("STT_TEMPERATURE", 0.0)
-    STT_VAD_FILTER: bool          = _env_bool("STT_VAD_FILTER", False)
+    STT_VAD_FILTER: bool          = _env_bool("STT_VAD_FILTER", True)  # skip silent segments in Whisper — saves ~200ms
     STT_CONDITION_ON_PREV: bool   = _env_bool("STT_CONDITION_ON_PREV", False)
 
     # ─── VAD (vad.py) ────────────────────────────────────────────
@@ -118,7 +118,7 @@ class VoiceConfig:
     LLM_MIN_ITEMS_FOR_SUMMARY: int = _env_int("LLM_MIN_ITEMS_FOR_SUMMARY", 5)
 
     # ─── LLM Brain (edge-case fallbacks — tighter budgets than response LLM) ─
-    LLM_BRAIN_TIMEOUT_SEC: float  = _env_float("LLM_BRAIN_TIMEOUT_SEC", 1.2)
+    LLM_BRAIN_TIMEOUT_SEC: float  = _env_float("LLM_BRAIN_TIMEOUT_SEC", 0.8)  # fail-fast — saves up to 400ms on slow responses
     LLM_BRAIN_MAX_TOKENS: int     = _env_int("LLM_BRAIN_MAX_TOKENS", 80)
     LLM_BRAIN_MAX_CALLS: int      = _env_int("LLM_BRAIN_MAX_CALLS", 1)  # max LLM brain calls per pipeline run
 

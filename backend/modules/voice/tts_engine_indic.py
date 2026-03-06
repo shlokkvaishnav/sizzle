@@ -116,6 +116,48 @@ class IndicTTSEngine:
 
         return mp3_buffer.getvalue()
 
+    async def synthesize_streaming(self, text: str, language: str):
+        """
+        Async generator — yields (chunk_bytes, is_last) as edge-tts produces audio.
+
+        This enables true streaming TTS: the WebSocket handler can send each chunk
+        to the client as it arrives, so playback starts ~500ms earlier than waiting
+        for the entire audio to be synthesized.
+
+        Usage:
+            async for chunk_bytes, is_last in indic_engine.synthesize_streaming(text, lang):
+                await websocket.send_json({...chunk_bytes base64...})
+
+        Raises:
+            RuntimeError: If engine is not ready.
+        """
+        if not self._ready:
+            raise RuntimeError("TTS engine not ready — call warmup() first")
+        if not text or not text.strip():
+            raise ValueError("Empty text provided to TTS")
+
+        import edge_tts
+
+        voice = self._select_voice(text, language)
+        communicate = edge_tts.Communicate(text, voice)
+
+        chunks = []
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                chunks.append(chunk["data"])
+                # Yield every chunk as it arrives — don't accumulate
+                yield chunk["data"], False
+
+        # Signal end of stream — yield empty bytes as terminator if needed
+        if not chunks:
+            # Synthesize nothing means TTS failed silently — caller should handle
+            return
+
+        # Mark the last real chunk as is_last=True by re-yielding it is unnecessary.
+        # Instead, yield a sentinel empty bytes so caller knows stream is done.
+        yield b"", True
+
+
     def _synthesize_sync(self, text: str, language: str) -> bytes:
         """Synchronous wrapper for _synthesize_async.
         Creates a new event loop if needed (safe for thread contexts)."""

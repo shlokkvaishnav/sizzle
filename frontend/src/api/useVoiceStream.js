@@ -2,17 +2,27 @@ import { useRef, useCallback, useState, useEffect } from 'react'
 
 /**
  * useVoiceStream — WebSocket-based real-time voice streaming hook.
- * 
- * Connects to ws://localhost:8000/api/voice/stream and sends
+ *
+ * Connects to the backend WebSocket at /api/voice/stream and streams
  * audio chunks in real-time. Receives partial transcripts and
- * pipeline results as they become available.
- * 
+ * pipeline results as they arrive.
+ *
+ * IMPORTANT: pass `sessionIdRef`, `languageRef`, and `restaurantIdRef`
+ * as React ref objects (not plain values). This ensures sendConfig()
+ * always reads the freshest values at call-time, avoiding stale-closure
+ * and race-condition bugs when startCall() regenerates the session ID
+ * just before calling connect().
+ *
  * Usage:
- *   const { connect, disconnect, sendAudioChunk, sendEnd, 
+ *   const sessionId  = useRef(generateSessionId())
+ *   const { connect, disconnect, sendAudioChunk, sendEnd,
  *           partialTranscript, isConnected } = useVoiceStream({
+ *     sessionIdRef: sessionId,       // ← pass the ref, not .current
+ *     languageRef,
+ *     restaurantIdRef,
  *     onPipelineResult: (result) => { ... },
- *     onTTSChunk: (audio_b64) => { ... },
- *     sessionId, language, restaurantId,
+ *     onTTSChunk: (audio_b64, payload) => { ... },
+ *     onError: (detail) => { ... },
  *   })
  */
 
@@ -31,9 +41,11 @@ export default function useVoiceStream({
   onPipelineResult,
   onTTSChunk,
   onError,
-  sessionId,
-  language,
-  restaurantId,
+  // Accept ref objects so we always read the latest value at call-time.
+  // Falls back gracefully if a plain value is passed (for backward compat).
+  sessionIdRef,
+  languageRef,
+  restaurantIdRef,
 } = {}) {
   const wsRef = useRef(null)
   const connectPromiseRef = useRef(null)
@@ -42,29 +54,64 @@ export default function useVoiceStream({
   const [finalTranscript, setFinalTranscript] = useState('')
   const callbacksRef = useRef({ onPipelineResult, onTTSChunk, onError })
 
-  // Keep callbacks fresh without re-creating effects
+  // Keep callbacks fresh without re-creating connect/disconnect closures
   useEffect(() => {
     callbacksRef.current = { onPipelineResult, onTTSChunk, onError }
   })
 
+  /**
+   * Read the current values from the refs at call-time.
+   * Supports both ref objects ({ current: value }) and plain values.
+   */
+  const readSessionId = useCallback(
+    () => (sessionIdRef && typeof sessionIdRef === 'object' && 'current' in sessionIdRef
+      ? sessionIdRef.current
+      : sessionIdRef),
+    [sessionIdRef],
+  )
+  const readLanguage = useCallback(
+    () => {
+      const lang = languageRef && typeof languageRef === 'object' && 'current' in languageRef
+        ? languageRef.current
+        : languageRef
+      return lang !== 'auto' ? lang : null
+    },
+    [languageRef],
+  )
+  const readRestaurantId = useCallback(
+    () => (restaurantIdRef && typeof restaurantIdRef === 'object' && 'current' in restaurantIdRef
+      ? restaurantIdRef.current
+      : restaurantIdRef),
+    [restaurantIdRef],
+  )
+
+  /**
+   * Send the config frame over the open WebSocket.
+   * Reads live ref values — never stale.
+   */
   const sendConfig = useCallback(() => {
     if (wsRef.current?.readyState !== WebSocket.OPEN) return false
-
     wsRef.current.send(JSON.stringify({
       type: 'config',
-      session_id: sessionId,
-      language: language !== 'auto' ? language : null,
-      restaurant_id: restaurantId,
+      session_id: readSessionId(),
+      language: readLanguage(),
+      restaurant_id: readRestaurantId(),
     }))
     return true
-  }, [sessionId, language, restaurantId])
+  }, [readSessionId, readLanguage, readRestaurantId])
 
+  /**
+   * Open a WebSocket connection (idempotent — reuses an open socket).
+   * Returns a promise that resolves to true on success, false on failure.
+   */
   const connect = useCallback(async () => {
+    // Already open — just refresh config and return
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       sendConfig()
       return true
     }
 
+    // Already connecting — reuse the pending promise
     if (connectPromiseRef.current) {
       return connectPromiseRef.current
     }
@@ -75,6 +122,7 @@ export default function useVoiceStream({
 
       ws.onopen = () => {
         setIsConnected(true)
+        // sendConfig reads fresh ref values right now — no stale closure
         sendConfig()
         connectPromiseRef.current = null
         resolve(true)
@@ -115,13 +163,14 @@ export default function useVoiceStream({
 
             case 'config_ack':
             case 'interrupted':
+              // Acknowledged — no action needed
               break
 
             default:
               break
           }
         } catch {
-          // Non-JSON message, ignore
+          // Non-JSON frame — ignore
         }
       }
 

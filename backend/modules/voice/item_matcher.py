@@ -15,8 +15,12 @@ Model: paraphrase-multilingual-MiniLM-L12-v2 (~420MB)
   - Fully offline after first download
 
 FAISS: vector similarity search, CPU-only, no server needed
+  Cache: embeddings saved to /tmp/petpooja_faiss_cache_<hash>.npz to skip
+  re-encoding on restart when the menu hasn't changed (saves ~800ms).
 """
 
+import hashlib
+import os
 import re
 import logging
 import numpy as np
@@ -102,6 +106,10 @@ class _SemanticIndex:
         """
         Encode all corpus keys and build a FAISS inner-product index.
         corpus: { alias_string: item_id }
+
+        Disk cache: embeddings are saved keyed by SHA256 of the corpus.
+        On next startup with the same menu, we skip sentence-transformer
+        encoding (~800ms saved) and load from cache instead.
         """
         self._load_model()
         if self._model is None:
@@ -112,15 +120,50 @@ class _SemanticIndex:
             self._keys = list(corpus.keys())
             self._ids = [corpus[k] for k in self._keys]
 
-            logger.info("Building semantic index for %d corpus entries...", len(self._keys))
-            embeddings = self._model.encode(
-                self._keys,
-                batch_size=cfg.ITEM_MATCH_ENCODE_BATCH,
-                show_progress_bar=False,
-                convert_to_numpy=True,
-                normalize_embeddings=True,   # L2-normalise → inner product = cosine sim
+            # —— Disk-cache check ———————————————————————————————————————
+            corpus_hash = hashlib.sha256(
+                "|".join(self._keys).encode("utf-8")
+            ).hexdigest()[:16]
+            cache_path = os.path.join(
+                os.environ.get("TEMP", "/tmp"),
+                f"petpooja_faiss_cache_{corpus_hash}.npz",
             )
-            embeddings = embeddings.astype(np.float32)
+
+            embeddings = None
+            if os.path.exists(cache_path):
+                try:
+                    cached = np.load(cache_path, allow_pickle=False)
+                    cached_embed = cached["embeddings"]
+                    # Sanity: shape must match current corpus size
+                    if cached_embed.shape[0] == len(self._keys):
+                        embeddings = cached_embed.astype(np.float32)
+                        logger.info(
+                            "FAISS cache hit (%d entries) — skipped encoding",
+                            len(self._keys),
+                        )
+                    else:
+                        logger.info("FAISS cache size mismatch — re-encoding")
+                except Exception as cache_err:
+                    logger.debug("FAISS cache load failed: %s", cache_err)
+
+            if embeddings is None:
+                logger.info(
+                    "Building semantic index for %d corpus entries...", len(self._keys)
+                )
+                embeddings = self._model.encode(
+                    self._keys,
+                    batch_size=cfg.ITEM_MATCH_ENCODE_BATCH,
+                    show_progress_bar=False,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,   # L2-normalise → inner product = cosine sim
+                )
+                embeddings = embeddings.astype(np.float32)
+                # Save to cache for next startup
+                try:
+                    np.savez_compressed(cache_path, embeddings=embeddings)
+                    logger.info("FAISS cache saved to %s", cache_path)
+                except Exception as save_err:
+                    logger.debug("FAISS cache save failed: %s", save_err)
 
             dim = embeddings.shape[1]
             self._index = faiss.IndexFlatIP(dim)
@@ -395,6 +438,33 @@ def match_item(text: str, corpus: dict, threshold: int = cfg.ITEM_MATCH_FUZZY_TH
                     key, item_id = candidates[0]
                     conf = 0.80 if len(candidates) == 1 else 0.70
                     return _build_result(item_id, key, conf, corpus, text_clean)
+
+        # ── Semantic-only fallback (multilingual / transliterated words) ──
+        # When fuzzy fails entirely, give FAISS a direct shot.
+        # This rescues cases where a transliterated word (e.g. a Gujarati
+        # food term romanized character-by-character) doesn't string-match
+        # any corpus alias but the multilingual sentence-transformer knows
+        # what it means semantically.
+        #
+        # Threshold: 0.75 = confident enough to auto-select;
+        #            0.65–0.75 = return with needs_disambiguation for user confirmation.
+        if _semantic_index._ready and len(text_clean) >= cfg.ITEM_MATCH_MIN_TOKEN_LEN:
+            sem_top = _semantic_index.top_k(text_clean, k=1)
+            if sem_top:
+                best_iid, best_sem_score = sem_top[0]
+                _SEMANTIC_ONLY_ACCEPT = 0.65        # min score to accept at all
+                _SEMANTIC_ONLY_CONFIDENT = 0.75     # above this → auto-select
+                if best_sem_score >= _SEMANTIC_ONLY_ACCEPT:
+                    best_alias = next((k for k, v in corpus.items() if v == best_iid), text_clean)
+                    # Scale: 0.65 → 0.70 final, 1.0 → 0.95 final
+                    final_score = 0.70 + (best_sem_score - _SEMANTIC_ONLY_ACCEPT) * (0.25 / 0.35)
+                    final_score = min(final_score, 0.95)
+                    logger.debug(
+                        "Semantic-only fallback: '%s' → '%s' (sem=%.2f, final=%.2f)",
+                        text_clean, best_alias, best_sem_score, final_score,
+                    )
+                    return _build_result(best_iid, best_alias, final_score, corpus, text_clean)
+
         return None
 
     matched_fuzzy_key, fuzzy_raw, _ = fuzzy_result

@@ -92,15 +92,26 @@ export default function WebCall() {
   const [error, setError] = useState(null)
   const [manualText, setManualText] = useState('')
   const [seconds, setSeconds] = useState(0)
+  const [orderPlaced, setOrderPlaced] = useState(false)     // shows ✓ toast
+  const [ordersRefreshKey, setOrdersRefreshKey] = useState(0) // increments to trigger orders re-fetch
+  // Keep refs in sync so useVoiceStream always reads the latest values
+  // without needing to re-create the WebSocket on every state change.
   const sessionId = useRef(generateSessionId())
+  const selectedLanguageRef = useRef('auto')
+  const restaurantIdRef = useRef(getRestaurantId())
+  useEffect(() => { selectedLanguageRef.current = selectedLanguage }, [selectedLanguage])
   const currentAudioRef = useRef(null)
   const recorderRef = useRef(null)
   const callActiveRef = useRef(false)
   const micPausedRef = useRef(false)
   const lastIntentRef = useRef(null)
-  const sendInterruptRef = useRef(() => {})
+  const sendInterruptRef = useRef(() => { })
   const silenceRepromptCountRef = useRef(0)
-  const restaurantId = getRestaurantId()
+  // Timer used to defer browser-TTS fallback: cancelled if real TTS audio arrives first
+  const ttsTextFallbackTimerRef = useRef(null)
+  // Buffer for streaming TTS chunks — accumulate then play when is_last=true
+  const ttsChunkBufferRef = useRef([])
+  const restaurantId = restaurantIdRef.current
 
   const appendMessage = useCallback((role, text, language = 'en') => {
     if (!text) return
@@ -190,9 +201,11 @@ export default function WebCall() {
     isConnected,
     partialTranscript,
   } = useVoiceStream({
-    sessionId: sessionId.current,
-    language: selectedLanguage,
-    restaurantId,
+    // Pass ref objects — the hook reads .current at call-time, so it always
+    // gets the freshest session ID / language even after startCall() regenerates.
+    sessionIdRef: sessionId,
+    languageRef: selectedLanguageRef,
+    restaurantIdRef: restaurantIdRef,
     onPipelineResult: (data) => {
       setError(null)
       setResult(data)
@@ -202,18 +215,72 @@ export default function WebCall() {
       if (data.transcript) {
         appendMessage('customer', data.transcript, data.detected_language || activeLanguage)
       }
-      if (data.tts_text && !data.tts_audio_b64) {
-        appendMessage('agent', data.tts_text, data.tts_language || data.detected_language || activeLanguage)
+      // If the backend already embedded tts_audio_b64 in the pipeline result, play it now.
+      // Otherwise, if there's tts_text, defer browser-TTS by up to 1500ms so that the
+      // tts_chunk (real Edge TTS audio) can arrive first and preempt the fallback.
+      if (data.tts_audio_b64) {
+        appendMessage('agent', data.tts_text || '', data.tts_language || data.detected_language || activeLanguage)
+        playVoiceResponse(data.tts_audio_b64, data.tts_text, data.tts_language || data.detected_language || activeLanguage)
+      } else if (data.tts_text) {
+        // Don't play immediately — wait to see if tts_chunk with real audio arrives first
+        const lang = data.tts_language || data.detected_language || activeLanguage
+        const text = data.tts_text
+        clearTimeout(ttsTextFallbackTimerRef.current)
+        ttsTextFallbackTimerRef.current = setTimeout(() => {
+          appendMessage('agent', text, lang)
+          playVoiceResponse(null, text, lang)
+          ttsTextFallbackTimerRef.current = null
+        }, 1500)
       }
       if (data.intent === 'CONFIRM' && data.session_items?.length > 0) {
         void handleConfirmOrder(data)
       }
     },
     onTTSChunk: (audioB64, payload) => {
+      // Real Edge TTS audio arrived — cancel any pending browser-TTS fallback
+      if (ttsTextFallbackTimerRef.current) {
+        clearTimeout(ttsTextFallbackTimerRef.current)
+        ttsTextFallbackTimerRef.current = null
+      }
+
+      // spoken_text is only included on the first chunk (chunk_index === 0)
       if (payload?.spoken_text) {
         appendMessage('agent', payload.spoken_text, payload.language || activeLanguage)
       }
-      playVoiceResponse(audioB64, payload?.spoken_text, payload?.language || activeLanguage)
+
+      // Buffer chunks — MP3 fragments can't play individually
+      if (audioB64 && audioB64.length > 0) {
+        ttsChunkBufferRef.current.push(audioB64)
+      }
+
+      // When the backend signals is_last=true, concatenate and play full audio
+      if (payload?.is_last) {
+        const chunks = ttsChunkBufferRef.current
+        ttsChunkBufferRef.current = []  // reset buffer for next response
+
+        if (chunks.length > 0) {
+          // Decode all base64 chunks and concatenate into one Uint8Array
+          const binaryChunks = chunks.map(b64 => {
+            const binary = atob(b64)
+            const bytes = new Uint8Array(binary.length)
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+            return bytes
+          })
+          const totalLen = binaryChunks.reduce((sum, c) => sum + c.length, 0)
+          const combined = new Uint8Array(totalLen)
+          let offset = 0
+          for (const chunk of binaryChunks) { combined.set(chunk, offset); offset += chunk.length }
+
+          const blob = new Blob([combined], { type: 'audio/mpeg' })
+          const url = URL.createObjectURL(blob)
+          // Reuse playVoiceResponse with the fully assembled audio
+          const combinedB64 = btoa(String.fromCharCode(...combined))
+          playVoiceResponse(combinedB64, payload?.spoken_text, payload?.language || activeLanguage)
+        } else if (payload?.spoken_text) {
+          // Sentinel with no accumulated chunks — fall back to browser TTS
+          playVoiceResponse(null, payload.spoken_text, payload.language || activeLanguage)
+        }
+      }
     },
     onError: (detail) => {
       setError(detail || 'Call connection failed')
@@ -231,6 +298,10 @@ export default function WebCall() {
       await confirmOrder(orderToConfirm, data?.kot)
       lastIntentRef.current = 'CONFIRM'
       setStatus('active')
+      setOrderPlaced(true)            // show success toast
+      setOrdersRefreshKey(k => k + 1) // trigger orders list refresh
+
+      // Speak the closing message, then auto-reset the call
       await speakAgentPrompt(
         activeLanguage === 'en'
           ? 'Your order has been placed. Thank you for calling Sizzle.'
@@ -239,14 +310,40 @@ export default function WebCall() {
             : activeLanguage === 'gu'
               ? 'તમારો ઓર્ડર મૂકી દીધો છે. Sizzle ને call કરવા બદલ આભાર.'
               : activeLanguage === 'mr'
-                ? 'तुमचा ऑर्डर लावला आहे. Sizzle ला call केल्याबद्दल धन्यवाद.'
+                ? 'तुमचा ऑर્डर लावला आहे. Sizzle ला call केल्याबद्दल धन्यवाद.'
                 : 'ನಿಮ್ಮ order place ಆಗಿದೆ. Sizzle ಗೆ call ಮಾಡಿದಕ್ಕಾಗಿ ಧನ್ಯವಾದ.',
         activeLanguage,
       )
+
+      // Auto-reset: give the user 2.5s to hear the closing, then hang up
+      setTimeout(() => {
+        // Stop recording + audio
+        recorderRef.current?.stopRecording()
+        handleInterruptAudio()
+        disconnect()
+
+        // Reset all call UI state
+        callActiveRef.current = false
+        micPausedRef.current = false
+        setCallActive(false)
+        setMicPaused(false)
+        setStatus('idle')
+        setResult(null)
+        setConversation([])
+        setSeconds(0)
+        setError(null)
+        silenceRepromptCountRef.current = 0
+        lastIntentRef.current = null
+        // Fresh session ID for the next call
+        sessionId.current = generateSessionId()
+        // Hide the toast after the reset
+        setTimeout(() => setOrderPlaced(false), 2000)
+      }, 2500)
+
     } catch (err) {
       setError(err.response?.data?.detail || err.detail || 'Order confirmation failed')
     }
-  }, [activeLanguage, result, speakAgentPrompt])
+  }, [activeLanguage, result, speakAgentPrompt, handleInterruptAudio, disconnect])
 
   const handleStreamStart = useCallback(async () => {
     if (!callActiveRef.current || micPausedRef.current) return false
@@ -517,11 +614,32 @@ export default function WebCall() {
                 </button>
               </div>
 
+              {orderPlaced && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'color-mix(in srgb, var(--success) 15%, transparent)',
+                    border: '1px solid color-mix(in srgb, var(--success) 40%, transparent)',
+                    color: 'var(--success)',
+                    fontSize: 14,
+                    fontWeight: 500,
+                  }}
+                >
+                  ✓ Order placed! The call will close in a moment.
+                </motion.div>
+              )}
+
               {error && (
                 <div className="error-bar" style={{ width: '100%' }}>
                   {error}
                 </div>
               )}
+
             </div>
           </div>
         </motion.div>

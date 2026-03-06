@@ -199,10 +199,18 @@ def save_order_to_db(order: dict, kot: dict, db: Session, restaurant_id: int | N
             else:
                 raise ValueError("No restaurants configured — cannot save order")
 
+        # Always generate a UNIQUE order_id so that re-confirming the same
+        # call session never triggers a UniqueViolation.
+        # Pattern: ORD-<YYYYMMDD>-<8 hex>  e.g. ORD-20260307-A3F1C2B9
+        now_utc = datetime.now(timezone.utc)
+        unique_order_id = f"ORD-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+        # Keep the call session id as order_number for UI traceability
+        session_ref = order.get("order_id", unique_order_id)
+
         # Write Order row
         db_order = Order(
-            order_id=order["order_id"],
-            order_number=order["order_id"],
+            order_id=unique_order_id,
+            order_number=session_ref,
             restaurant_id=restaurant_id,
             total_amount=order["total"],
             status="confirmed",
@@ -230,21 +238,21 @@ def save_order_to_db(order: dict, kot: dict, db: Session, restaurant_id: int | N
             db_kot = KOT(
                 kot_id=kot["kot_id"],
                 order_pk=db_order.id,
-                order_id=order["order_id"],
+                order_id=unique_order_id,
                 items_summary=kot.get("items_summary", []),
                 print_ready=kot.get("print_ready", ""),
             )
             db.add(db_kot)
 
         db.commit()
-        logger.info("Order %s saved to DB", order["order_id"])
+        logger.info("Order %s saved to DB (session: %s)", unique_order_id, session_ref)
 
         return {
             "success": True,
-            "order_id": order["order_id"],
+            "order_id": unique_order_id,
             "kot_id": kot.get("kot_id", ""),
             "status": "confirmed",
-            "total": order["total"],
+            "total": order.get("total", 0),
         }
 
     except Exception:
