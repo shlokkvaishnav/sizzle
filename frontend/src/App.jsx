@@ -12,6 +12,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard'))
 const MenuAnalysis = lazy(() => import('./pages/MenuAnalysis'))
 const ComboEngine = lazy(() => import('./pages/ComboEngine'))
 const VoiceOrder = lazy(() => import('./pages/VoiceOrder'))
+const WebCall = lazy(() => import('./pages/WebCall'))
 const Orders = lazy(() => import('./pages/Orders'))
 const Tables = lazy(() => import('./pages/Tables'))
 const Inventory = lazy(() => import('./pages/Inventory'))
@@ -55,6 +56,7 @@ export default function App() {
                 <Route path="menu-analysis" element={<MenuAnalysis />} />
                 <Route path="combos" element={<ComboEngine />} />
                 <Route path="voice-order" element={<VoiceOrder />} />
+                <Route path="web-call" element={<WebCall />} />
                 <Route path="orders" element={<Orders />} />
                 <Route path="tables" element={<Tables />} />
                 <Route path="inventory" element={<Inventory />} />

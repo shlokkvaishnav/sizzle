@@ -4,7 +4,7 @@ import { motion } from 'motion/react'
 import {
   LayoutDashboard, Target, Link2, ClipboardList,
   LayoutGrid, Archive, BarChart3, Settings, LogOut,
-  ChevronsRight, Mic,
+  ChevronsRight, Mic, PhoneCall,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
@@ -20,6 +20,7 @@ const navGroups = [
     label: 'Operations',
     items: [
       { to: '/dashboard/combos', icon: Link2, label: 'Combo Engine' },
+      { to: '/dashboard/web-call', icon: PhoneCall, label: 'Web Call' },
       { to: '/dashboard/orders', icon: ClipboardList, label: 'Orders' },
       { to: '/dashboard/tables', icon: LayoutGrid, label: 'Tables' },
       { to: '/dashboard/inventory', icon: Archive, label: 'Inventory' },
@@ -39,7 +40,10 @@ export default function DashboardLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { logout, restaurant } = useAuth()
-  const onVoiceOrderPage = location.pathname === '/dashboard/voice-order'
+  const onVoiceOrderPage = (
+    location.pathname === '/dashboard/voice-order'
+    || location.pathname === '/dashboard/web-call'
+  )
 
   return (
     <div className="app-layout">

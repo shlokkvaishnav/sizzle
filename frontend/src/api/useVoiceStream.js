@@ -103,7 +103,7 @@ export default function useVoiceStream({
 
             case 'tts_chunk':
               if (callbacksRef.current.onTTSChunk && data.audio_b64) {
-                callbacksRef.current.onTTSChunk(data.audio_b64)
+                callbacksRef.current.onTTSChunk(data.audio_b64, data)
               }
               break
 

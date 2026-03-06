@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { submitTextOrder, transcribeAudio, confirmOrder, getMenuMatrix, getTrends } from '../api/client'
+import { submitTextOrder, transcribeAudio, confirmOrder, getMenuMatrix, getTrends, speakText } from '../api/client'
 import useVoiceStream from '../api/useVoiceStream'
 import VoiceRecorder from '../components/VoiceRecorder'
 import OrderSummary from '../components/OrderSummary'
@@ -23,6 +23,31 @@ function getRestaurantId() {
   }
 }
 
+const SILENCE_REPROMPT_LIMIT = 2
+
+const SILENCE_FOLLOW_UP = {
+  en: {
+    withCart: 'I did not hear anything. Would you like to add anything else, or should I place the order?',
+    noCart: 'I did not hear anything. What would you like to order?',
+  },
+  hi: {
+    withCart: 'Mujhe kuch sunai nahi diya. Aur kuch add karna hai, ya main order place kar doon?',
+    noCart: 'Mujhe kuch sunai nahi diya. Aap kya order karna chahenge?',
+  },
+  gu: {
+    withCart: 'મને કંઈ સંભળાયું નહીં. બીજું કંઈ ઉમેરવું છે કે હું ઓર્ડર મૂકી દઉં?',
+    noCart: 'મને કંઈ સંભળાયું નહીં. તમે શું ઓર્ડર કરશો?',
+  },
+  mr: {
+    withCart: 'मला काही ऐकू आलं नाही. अजून काही जोडायचं आहे का, की मी ऑर्डर लावू?',
+    noCart: 'मला काही ऐकू आलं नाही. तुम्हाला काय ऑर्डर करायचं आहे?',
+  },
+  kn: {
+    withCart: 'ನನಗೆ ಏನೂ ಕೇಳಿಸಲಿಲ್ಲ. ಇನ್ನೇನಾದರೂ ಸೇರಿಸಬೇಕೇ, ಇಲ್ಲವೇ ನಾನು order ಮಾಡಲೇ?',
+    noCart: 'ನನಗೆ ಏನೂ ಕೇಳಿಸಲಿಲ್ಲ. ನೀವು ಏನು order ಮಾಡುತ್ತೀರಿ?',
+  },
+}
+
 export default function VoiceOrder() {
   const [result, setResult] = useState(null)
   const [textInput, setTextInput] = useState('')
@@ -41,6 +66,7 @@ export default function VoiceOrder() {
   const autoListenRef = useRef(true)
   const lastIntentRef = useRef(null)
   const sendInterruptRef = useRef(() => {})
+  const silenceRepromptCountRef = useRef(0)
   const restaurantId = getRestaurantId()
 
   // ── TTS Audio Playback ──
@@ -87,6 +113,7 @@ export default function VoiceOrder() {
   // ── Process result and show feedback ──
   const processResult = useCallback((data) => {
     setResult(data)
+    silenceRepromptCountRef.current = 0
 
     // Track last intent for auto-listen decisions
     lastIntentRef.current = data.intent
@@ -266,6 +293,7 @@ export default function VoiceOrder() {
     setError(null)
     setTextInput('')
     setActionFeedback(null)
+    silenceRepromptCountRef.current = 0
     sessionId.current = generateSessionId()
   }
 
@@ -319,6 +347,38 @@ export default function VoiceOrder() {
   // Effective order for display (use session_order which covers all turns)
   const effectiveOrder = result?.session_order || result?.order
   const liveTranscript = partialTranscript || finalTranscript || ''
+
+  const activeConversationLanguage = useMemo(() => {
+    const candidate = result?.tts_language || result?.detected_language
+    if (candidate && SILENCE_FOLLOW_UP[candidate]) return candidate
+    if (selectedLanguage !== 'auto' && SILENCE_FOLLOW_UP[selectedLanguage]) return selectedLanguage
+    return 'en'
+  }, [result, selectedLanguage])
+
+  const speakAgentPrompt = useCallback(async (text, language) => {
+    try {
+      const tts = await speakText(text, language)
+      if (tts?.audio_b64) {
+        playTTSAudio(tts.audio_b64)
+      }
+    } catch {
+      // Fall back to the visual prompt if TTS is unavailable.
+    }
+  }, [playTTSAudio])
+
+  const autoListenSilenceHandler = useCallback(() => {
+    if (!autoListenRef.current) return
+    if (silenceRepromptCountRef.current >= SILENCE_REPROMPT_LIMIT) return
+
+    const lang = activeConversationLanguage
+    const prompt = hasCart
+      ? SILENCE_FOLLOW_UP[lang].withCart
+      : SILENCE_FOLLOW_UP[lang].noCart
+
+    silenceRepromptCountRef.current += 1
+    setActionFeedback({ type: 'info', message: prompt })
+    speakAgentPrompt(prompt, lang)
+  }, [activeConversationLanguage, hasCart, speakAgentPrompt])
 
   // Determine step: 1=Listen, 2=Review (with continued input)
   const step = result ? 2 : 1
@@ -457,7 +517,7 @@ export default function VoiceOrder() {
                 onRecorded={handleAudioRecorded}
                 onStartRecording={handleInterruptAudio}
                 autoListen={autoListenEnabled}
-                onAutoListenSilence={handleAutoListenSilence}
+                onAutoListenSilence={autoListenSilenceHandler}
                 onAudioChunk={sendAudioChunk}
                 onStreamStart={handleStreamStart}
                 onStreamEnd={handleStreamEnd}

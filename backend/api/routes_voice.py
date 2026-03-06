@@ -613,8 +613,8 @@ async def _process_ws_audio(
             **result,
         })
 
-        # Stream TTS response
-        if cfg.TTS_ENABLED and result.get("items"):
+        # Stream TTS response for every conversational turn, not only item-add turns.
+        if cfg.TTS_ENABLED:
             try:
                 from modules.voice.tts import tts_orchestrator
                 detected_lang = result.get("detected_language", "en")
