@@ -3,8 +3,8 @@ Sizzle — Full Database Seed Script
 ====================================
 1. Drops & recreates all tables (clean slate)
 2. Seeds 2 restaurants with full data:
-   - Restaurant 1: Spice Garden (Indian, 100 items)
-   - Restaurant 2: Dragon Wok  (Chinese, 50 items)
+   - Restaurant 1: Spice Craft (Indian Multi-Cuisine, 100 items)
+   - Restaurant 2: Dragon Wok  (Chinese & Pan-Asian, 50 items)
 3. Seeds ingredients + recipes (menu_item_ingredients)
 4. Seeds 200 historical orders per restaurant (past 90 days)
 5. Logs stock usage from those orders
@@ -314,23 +314,23 @@ WHERE o.status = 'confirmed';
 # ──────────────────────── seed data ─────────────────────────────
 
 RESTAURANT_1 = {
-    "name": "Spice Garden",
-    "slug": "spice-garden",
-    "email": "admin@spicegarden.in",
-    "password": "admin123",
+    "name": "Spice Craft",
+    "slug": "spice-craft",
+    "email": "admin@spicecraft.in",
+    "password": "spicecraft123",
     "phone": "+91-9876543210",
     "address": "12, MG Road, Bengaluru, Karnataka 560001",
-    "cuisine_type": "North Indian",
+    "cuisine_type": "Indian Multi-Cuisine",
 }
 
 RESTAURANT_2 = {
     "name": "Dragon Wok",
     "slug": "dragon-wok",
     "email": "admin@dragonwok.in",
-    "password": "admin123",
+    "password": "dragon123",
     "phone": "+91-9123456780",
     "address": "45, Linking Road, Bandra West, Mumbai 400050",
-    "cuisine_type": "Chinese",
+    "cuisine_type": "Chinese & Pan-Asian",
 }
 
 # ══════════════════════════════════════════════════════════════════
@@ -789,7 +789,7 @@ def run():
     r1_id = insert_restaurant(RESTAURANT_1)
     r2_id = insert_restaurant(RESTAURANT_2)
     conn.commit()
-    print(f"  ✓ Restaurants created: R1={r1_id} (Spice Garden), R2={r2_id} (Dragon Wok)")
+    print(f"  ✓ Restaurants created: R1={r1_id} (Spice Craft), R2={r2_id} (Dragon Wok)")
 
     # ── 2. categories ───────────────────────────────────────────
     def insert_categories(restaurant_id, cat_dict):

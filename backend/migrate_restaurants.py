@@ -68,13 +68,13 @@ print("\n── Step 3: Create restaurant accounts ──")
 db = SessionLocal()
 
 # Restaurant 1: Sizzle Indian Kitchen
-r1 = db.query(Restaurant).filter(Restaurant.slug == "sizzle-indian").first()
+r1 = db.query(Restaurant).filter(Restaurant.slug == "spice-craft").first()
 if not r1:
     r1 = Restaurant(
-        name="Sizzle Indian Kitchen",
-        slug="sizzle-indian",
-        email="admin@sizzle.in",
-        password_hash=sha256("sizzle123"),
+        name="Spice Craft",
+        slug="spice-craft",
+        email="admin@spicecraft.in",
+        password_hash=sha256("spicecraft123"),
         phone="+91 98765 43210",
         address="FC Road, Pune, Maharashtra 411005",
         cuisine_type="Indian Multi-Cuisine",
@@ -82,8 +82,8 @@ if not r1:
     db.add(r1)
     db.flush()
     print(f"  ✅ Restaurant 1: {r1.name} (id={r1.id})")
-    print(f"     📧 Email: admin@sizzle.in")
-    print(f"     🔑 Password: sizzle123")
+    print(f"     📧 Email: admin@spicecraft.in")
+    print(f"     🔑 Password: spicecraft123")
 else:
     print(f"  ⏭️  Restaurant 1 exists (id={r1.id})")
 
@@ -334,9 +334,9 @@ print(f"""
 ║              MULTI-RESTAURANT SETUP DONE             ║
 ╠══════════════════════════════════════════════════════╣
 ║                                                      ║
-║  🍛 Restaurant 1: Sizzle Indian Kitchen              ║
-║     Email: admin@sizzle.in                           ║
-║     Pass:  sizzle123                                 ║
+║  🍛 Restaurant 1: Spice Craft                        ║
+║     Email: admin@spicecraft.in                       ║
+║     Pass:  spicecraft123                             ║
 ║     Items: {r1_items:<5} | Sales: {r1_sales:<6}                    ║
 ║                                                      ║
 ║  🐉 Restaurant 2: Dragon Wok                         ║
