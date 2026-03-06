@@ -1,14 +1,16 @@
 import { motion, useInView } from 'motion/react'
 import { useRef } from 'react'
 import { formatRupees, formatConfidence, formatSupport, formatLift } from '../utils/format'
+import { useThresholds } from '../context/SettingsContext'
 
 export default function ComboCard({ combo }) {
   const ref = useRef(null)
   const isInView = useInView(ref, { once: true })
   const itemNames = combo.item_names || []
+  const thresholds = useThresholds()
 
   const confPct = (combo.confidence * 100)
-  const confColor = confPct >= 80 ? 'var(--success)' : confPct >= 60 ? 'var(--warning)' : 'var(--danger)'
+  const confColor = confPct >= thresholds.confidence_green_min ? 'var(--success)' : confPct >= thresholds.confidence_yellow_min ? 'var(--warning)' : 'var(--danger)'
 
   return (
     <motion.div

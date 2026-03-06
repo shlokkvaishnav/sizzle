@@ -290,9 +290,9 @@ export default function MenuAnalysis() {
             </span>
           </div>
           <div className="card-body" style={{ padding: 0 }}>
-            {priceInsight.usedSynthetic && (
+            {priceInsight.insufficientData && priceInsight.opportunities.length === 0 && (
               <div style={{ padding: 12, background: 'color-mix(in srgb, var(--warning) 10%, transparent)', fontSize: 12, borderBottom: '1px solid var(--border-subtle)' }}>
-                Fewer than 30 orders detected. Showing synthetic pricing suggestions for analysis only.
+                Not enough order history to generate price recommendations. Suggestions will appear as more orders are placed.
               </div>
             )}
 

@@ -44,6 +44,9 @@ const LightRays = ({
     mouseInfluence = 0.1,
     noiseAmount = 0.0,
     distortion = 0.0,
+    maxDpr = 1.25,
+    targetFps = 45,
+    enabled = true,
     className = ''
 }) => {
     const containerRef = useRef(null);
@@ -52,9 +55,11 @@ const LightRays = ({
     const mouseRef = useRef({ x: 0.5, y: 0.5 });
     const smoothMouseRef = useRef({ x: 0.5, y: 0.5 });
     const animationIdRef = useRef(null);
+    const lastFrameTimeRef = useRef(0);
     const meshRef = useRef(null);
     const cleanupFunctionRef = useRef(null);
     const [isVisible, setIsVisible] = useState(false);
+    const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
     const observerRef = useRef(null);
 
     useEffect(() => {
@@ -79,7 +84,13 @@ const LightRays = ({
     }, []);
 
     useEffect(() => {
-        if (!isVisible || !containerRef.current) return;
+        const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
+        document.addEventListener('visibilitychange', onVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+    }, []);
+
+    useEffect(() => {
+        if (!enabled || !isVisible || !isDocumentVisible || !containerRef.current) return;
 
         if (cleanupFunctionRef.current) {
             cleanupFunctionRef.current();
@@ -94,7 +105,7 @@ const LightRays = ({
             if (!containerRef.current) return;
 
             const renderer = new Renderer({
-                dpr: Math.min(window.devicePixelRatio, 2),
+                dpr: Math.min(window.devicePixelRatio, maxDpr),
                 alpha: true
             });
             rendererRef.current = renderer;
@@ -243,7 +254,7 @@ void main() {
             const updatePlacement = () => {
                 if (!containerRef.current || !renderer) return;
 
-                renderer.dpr = Math.min(window.devicePixelRatio, 2);
+                renderer.dpr = Math.min(window.devicePixelRatio, maxDpr);
 
                 const { clientWidth: wCSS, clientHeight: hCSS } = containerRef.current;
                 renderer.setSize(wCSS, hCSS);
@@ -264,6 +275,12 @@ void main() {
                     return;
                 }
 
+                const frameInterval = 1000 / Math.max(1, targetFps);
+                if (t - lastFrameTimeRef.current < frameInterval) {
+                    animationIdRef.current = requestAnimationFrame(loop);
+                    return;
+                }
+                lastFrameTimeRef.current = t;
                 uniforms.iTime.value = t * 0.001;
 
                 if (followMouse && mouseInfluence > 0.0) {
@@ -328,6 +345,7 @@ void main() {
         };
     }, [
         isVisible,
+        isDocumentVisible,
         raysOrigin,
         raysColor,
         raysSpeed,
@@ -339,7 +357,10 @@ void main() {
         followMouse,
         mouseInfluence,
         noiseAmount,
-        distortion
+        distortion,
+        maxDpr,
+        targetFps,
+        enabled
     ]);
 
     useEffect(() => {
@@ -388,10 +409,16 @@ void main() {
         };
 
         if (followMouse) {
-            window.addEventListener('mousemove', handleMouseMove);
-            return () => window.removeEventListener('mousemove', handleMouseMove);
+            const container = containerRef.current;
+            if (!container) return;
+            container.addEventListener('mousemove', handleMouseMove, { passive: true });
+            return () => container.removeEventListener('mousemove', handleMouseMove);
         }
     }, [followMouse]);
+
+    if (!enabled) {
+        return <div ref={containerRef} className={`light-rays-container ${className}`.trim()} />;
+    }
 
     return <div ref={containerRef} className={`light-rays-container ${className}`.trim()} />;
 };

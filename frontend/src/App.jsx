@@ -2,6 +2,7 @@ import { Suspense, lazy } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { LanguageProvider } from './context/LanguageContext'
 import { AuthProvider } from './context/AuthContext'
+import { SettingsProvider } from './context/SettingsContext'
 
 const RequireAuth = lazy(() => import('./components/RequireAuth'))
 const DashboardLayout = lazy(() => import('./layouts/DashboardLayout'))
@@ -33,6 +34,7 @@ export default function App() {
   return (
     <LanguageProvider>
       <AuthProvider>
+        <SettingsProvider>
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <Suspense fallback={<RouteFallback />}>
             <Routes>
@@ -64,6 +66,7 @@ export default function App() {
             </Routes>
           </Suspense>
         </BrowserRouter>
+        </SettingsProvider>
       </AuthProvider>
     </LanguageProvider>
   )

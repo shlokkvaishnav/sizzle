@@ -1,6 +1,8 @@
 import { motion } from 'motion/react'
+import { useTaxRate } from '../context/SettingsContext'
 
 export default function OrderSummary({ order }) {
+  const taxRate = useTaxRate()
   if (!order) return null
 
   return (
@@ -76,7 +78,7 @@ export default function OrderSummary({ order }) {
             <span style={{ fontFamily: 'var(--font-mono)' }}>₹{order.subtotal}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>
-            <span>GST (5%)</span>
+            <span>GST ({taxRate}%)</span>
             <span style={{ fontFamily: 'var(--font-mono)' }}>₹{order.tax}</span>
           </div>
           <div style={{

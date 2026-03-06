@@ -23,39 +23,41 @@ logger = logging.getLogger("petpooja.revenue.trends")
 # ── Batch query helpers (avoid N+1) ──────────────
 
 
-def _batch_item_revenue(db: Session, start: datetime, end: datetime) -> dict[int, float]:
+def _batch_item_revenue(db: Session, start: datetime, end: datetime, restaurant_id: int = None) -> dict[int, float]:
     """Get total revenue per item_id in a date range — single query."""
-    rows = (
+    q = (
         db.query(
             VSale.item_id,
             func.coalesce(func.sum(VSale.total_price), 0).label("rev"),
         )
         .filter(VSale.sold_at >= start, VSale.sold_at < end)
-        .group_by(VSale.item_id)
-        .all()
     )
+    if restaurant_id:
+        q = q.filter(VSale.restaurant_id == restaurant_id)
+    rows = q.group_by(VSale.item_id).all()
     return {r.item_id: float(r.rev) for r in rows}
 
 
-def _batch_item_qty(db: Session, start: datetime, end: datetime) -> dict[int, int]:
+def _batch_item_qty(db: Session, start: datetime, end: datetime, restaurant_id: int = None) -> dict[int, int]:
     """Get total qty per item_id in a date range — single query."""
-    rows = (
+    q = (
         db.query(
             VSale.item_id,
             func.coalesce(func.sum(VSale.quantity), 0).label("qty"),
         )
         .filter(VSale.sold_at >= start, VSale.sold_at < end)
-        .group_by(VSale.item_id)
-        .all()
     )
+    if restaurant_id:
+        q = q.filter(VSale.restaurant_id == restaurant_id)
+    rows = q.group_by(VSale.item_id).all()
     return {r.item_id: int(r.qty) for r in rows}
 
 
-def _batch_items_revenue(db: Session, item_ids: list[int], start: datetime, end: datetime) -> dict[int, float]:
+def _batch_items_revenue(db: Session, item_ids: list[int], start: datetime, end: datetime, restaurant_id: int = None) -> dict[int, float]:
     """Get total revenue per item_id for a list of IDs — single query."""
     if not item_ids:
         return {}
-    rows = (
+    q = (
         db.query(
             VSale.item_id,
             func.coalesce(func.sum(VSale.total_price), 0).label("rev"),
@@ -65,13 +67,14 @@ def _batch_items_revenue(db: Session, item_ids: list[int], start: datetime, end:
             VSale.sold_at >= start,
             VSale.sold_at < end,
         )
-        .group_by(VSale.item_id)
-        .all()
     )
+    if restaurant_id:
+        q = q.filter(VSale.restaurant_id == restaurant_id)
+    rows = q.group_by(VSale.item_id).all()
     return {r.item_id: float(r.rev) for r in rows}
 
 
-def calculate_trends(db: Session) -> dict:
+def calculate_trends(db: Session, restaurant_id: int = None) -> dict:
     """
     Calculate time-based trends for all menu items.
 
@@ -85,10 +88,10 @@ def calculate_trends(db: Session) -> dict:
     """
     now = datetime.now(timezone.utc)
 
-    item_trends = _calculate_item_trends(db, now)
-    category_trends = _calculate_category_trends(db, now)
-    seasonal = _detect_seasonal_patterns(db, now)
-    drift = _detect_quadrant_drift(db, now)
+    item_trends = _calculate_item_trends(db, now, restaurant_id=restaurant_id)
+    category_trends = _calculate_category_trends(db, now, restaurant_id=restaurant_id)
+    seasonal = _detect_seasonal_patterns(db, now, restaurant_id=restaurant_id)
+    drift = _detect_quadrant_drift(db, now, restaurant_id=restaurant_id)
 
     return {
         "item_trends": item_trends,
@@ -98,7 +101,7 @@ def calculate_trends(db: Session) -> dict:
     }
 
 
-def calculate_wow_mom(db: Session) -> list[dict]:
+def calculate_wow_mom(db: Session, restaurant_id: int = None) -> list[dict]:
     """
     Calculate week-over-week and month-over-month revenue changes per item.
     Uses 4 batch queries instead of 4 × N individual queries.
@@ -106,18 +109,20 @@ def calculate_wow_mom(db: Session) -> list[dict]:
     now = datetime.now(timezone.utc)
     results = []
 
-    items = (
+    item_q = (
         db.query(MenuItem)
         .options(joinedload(MenuItem.category))
         .filter(MenuItem.is_available.is_(True))
-        .all()
     )
+    if restaurant_id:
+        item_q = item_q.filter(MenuItem.restaurant_id == restaurant_id)
+    items = item_q.all()
 
     # 4 batch queries
-    rev_this_week = _batch_item_revenue(db, now - timedelta(days=7), now)
-    rev_last_week = _batch_item_revenue(db, now - timedelta(days=14), now - timedelta(days=7))
-    rev_this_month = _batch_item_revenue(db, now - timedelta(days=30), now)
-    rev_last_month = _batch_item_revenue(db, now - timedelta(days=60), now - timedelta(days=30))
+    rev_this_week = _batch_item_revenue(db, now - timedelta(days=7), now, restaurant_id=restaurant_id)
+    rev_last_week = _batch_item_revenue(db, now - timedelta(days=14), now - timedelta(days=7), restaurant_id=restaurant_id)
+    rev_this_month = _batch_item_revenue(db, now - timedelta(days=30), now, restaurant_id=restaurant_id)
+    rev_last_month = _batch_item_revenue(db, now - timedelta(days=60), now - timedelta(days=30), restaurant_id=restaurant_id)
 
     for item in items:
         tw = rev_this_week.get(item.id, 0)
@@ -146,7 +151,7 @@ def calculate_wow_mom(db: Session) -> list[dict]:
     return results
 
 
-def estimate_price_elasticity(db: Session) -> list[dict]:
+def estimate_price_elasticity(db: Session, restaurant_id: int = None) -> list[dict]:
     """
     Estimate price elasticity by comparing periods where an item's
     effective price changed (different unit_price values in VSale).
@@ -157,12 +162,14 @@ def estimate_price_elasticity(db: Session) -> list[dict]:
     now = datetime.now(timezone.utc)
     results = []
 
-    items = (
+    item_q = (
         db.query(MenuItem)
         .options(joinedload(MenuItem.category))
         .filter(MenuItem.is_available.is_(True))
-        .all()
     )
+    if restaurant_id:
+        item_q = item_q.filter(MenuItem.restaurant_id == restaurant_id)
+    items = item_q.all()
 
     for item in items:
         # Get distinct price periods
@@ -241,22 +248,24 @@ def estimate_price_elasticity(db: Session) -> list[dict]:
 # ── Internal helpers ──────────────────────────────
 
 
-def _calculate_item_trends(db: Session, now: datetime) -> list[dict]:
+def _calculate_item_trends(db: Session, now: datetime, restaurant_id: int = None) -> list[dict]:
     """30/60/90 day comparison per item — uses batch queries (6 total, not 6×N)."""
-    items = (
+    item_q = (
         db.query(MenuItem)
         .options(joinedload(MenuItem.category))
         .filter(MenuItem.is_available.is_(True))
-        .all()
     )
+    if restaurant_id:
+        item_q = item_q.filter(MenuItem.restaurant_id == restaurant_id)
+    items = item_q.all()
 
     # 6 batch queries instead of 6 × len(items)
-    rev_30 = _batch_item_revenue(db, now - timedelta(days=30), now)
-    rev_60 = _batch_item_revenue(db, now - timedelta(days=60), now - timedelta(days=30))
-    rev_90 = _batch_item_revenue(db, now - timedelta(days=90), now - timedelta(days=60))
-    qty_30 = _batch_item_qty(db, now - timedelta(days=30), now)
-    qty_60 = _batch_item_qty(db, now - timedelta(days=60), now - timedelta(days=30))
-    qty_90 = _batch_item_qty(db, now - timedelta(days=90), now - timedelta(days=60))
+    rev_30 = _batch_item_revenue(db, now - timedelta(days=30), now, restaurant_id=restaurant_id)
+    rev_60 = _batch_item_revenue(db, now - timedelta(days=60), now - timedelta(days=30), restaurant_id=restaurant_id)
+    rev_90 = _batch_item_revenue(db, now - timedelta(days=90), now - timedelta(days=60), restaurant_id=restaurant_id)
+    qty_30 = _batch_item_qty(db, now - timedelta(days=30), now, restaurant_id=restaurant_id)
+    qty_60 = _batch_item_qty(db, now - timedelta(days=60), now - timedelta(days=30), restaurant_id=restaurant_id)
+    qty_90 = _batch_item_qty(db, now - timedelta(days=90), now - timedelta(days=60), restaurant_id=restaurant_id)
 
     results = []
     for item in items:
@@ -299,17 +308,17 @@ def _calculate_item_trends(db: Session, now: datetime) -> list[dict]:
     return results
 
 
-def _calculate_category_trends(db: Session, now: datetime) -> list[dict]:
+def _calculate_category_trends(db: Session, now: datetime, restaurant_id: int = None) -> list[dict]:
     """Per-category revenue trend over 30-day windows — 2 batch queries."""
     # Batch: all item revenue in each 30-day window
-    rev_30_all = _batch_item_revenue(db, now - timedelta(days=30), now)
-    rev_60_all = _batch_item_revenue(db, now - timedelta(days=60), now - timedelta(days=30))
+    rev_30_all = _batch_item_revenue(db, now - timedelta(days=30), now, restaurant_id=restaurant_id)
+    rev_60_all = _batch_item_revenue(db, now - timedelta(days=60), now - timedelta(days=30), restaurant_id=restaurant_id)
 
     categories = db.query(Category).filter(Category.is_active.is_(True)).all()
     results = []
 
     for cat in categories:
-        item_ids = {i.id for i in cat.items if i.is_available}
+        item_ids = {i.id for i in cat.items if i.is_available and (not restaurant_id or i.restaurant_id == restaurant_id)}
         if not item_ids:
             continue
 
@@ -331,25 +340,27 @@ def _calculate_category_trends(db: Session, now: datetime) -> list[dict]:
     return results
 
 
-def _detect_seasonal_patterns(db: Session, now: datetime) -> list[dict]:
+def _detect_seasonal_patterns(db: Session, now: datetime, restaurant_id: int = None) -> list[dict]:
     """
     Detect items with monthly sales variance > 50% of their mean,
     indicating seasonal demand patterns.
     Uses 6 batch queries instead of 6 × N.
     """
-    items = (
+    item_q = (
         db.query(MenuItem)
         .options(joinedload(MenuItem.category))
         .filter(MenuItem.is_available.is_(True))
-        .all()
     )
+    if restaurant_id:
+        item_q = item_q.filter(MenuItem.restaurant_id == restaurant_id)
+    items = item_q.all()
 
     # 6 batch queries for 6 months
     monthly_batches = []
     for i in range(6):
         start = now - timedelta(days=30 * (i + 1))
         end = now - timedelta(days=30 * i)
-        monthly_batches.append(_batch_item_qty(db, start, end))
+        monthly_batches.append(_batch_item_qty(db, start, end, restaurant_id=restaurant_id))
 
     results = []
     for item in items:
@@ -385,7 +396,7 @@ def _detect_seasonal_patterns(db: Session, now: datetime) -> list[dict]:
     return results
 
 
-def _detect_quadrant_drift(db: Session, now: datetime) -> list[dict]:
+def _detect_quadrant_drift(db: Session, now: datetime, restaurant_id: int = None) -> list[dict]:
     """
     Detect items whose BCG quadrant position is shifting.
     Uses batch queries (4 total) instead of 4 × N.
@@ -394,18 +405,21 @@ def _detect_quadrant_drift(db: Session, now: datetime) -> list[dict]:
     from .popularity import calculate_popularity
     from .menu_matrix import classify_menu_matrix
 
-    margins = calculate_margins(db)
-    popularity = calculate_popularity(db)
+    margins = calculate_margins(db, restaurant_id=restaurant_id)
+    popularity = calculate_popularity(db, restaurant_id=restaurant_id)
     current_matrix = classify_menu_matrix(margins, popularity)
     current_map = {m["item_id"]: m for m in current_matrix}
 
-    items = db.query(MenuItem).filter(MenuItem.is_available.is_(True)).all()
+    item_q = db.query(MenuItem).filter(MenuItem.is_available.is_(True))
+    if restaurant_id:
+        item_q = item_q.filter(MenuItem.restaurant_id == restaurant_id)
+    items = item_q.all()
 
     # 4 batch queries
-    qty_recent = _batch_item_qty(db, now - timedelta(days=30), now)
-    qty_prev = _batch_item_qty(db, now - timedelta(days=60), now - timedelta(days=30))
-    rev_recent = _batch_item_revenue(db, now - timedelta(days=30), now)
-    rev_prev = _batch_item_revenue(db, now - timedelta(days=60), now - timedelta(days=30))
+    qty_recent = _batch_item_qty(db, now - timedelta(days=30), now, restaurant_id=restaurant_id)
+    qty_prev = _batch_item_qty(db, now - timedelta(days=60), now - timedelta(days=30), restaurant_id=restaurant_id)
+    rev_recent = _batch_item_revenue(db, now - timedelta(days=30), now, restaurant_id=restaurant_id)
+    rev_prev = _batch_item_revenue(db, now - timedelta(days=60), now - timedelta(days=30), restaurant_id=restaurant_id)
 
     results = []
     for item in items:

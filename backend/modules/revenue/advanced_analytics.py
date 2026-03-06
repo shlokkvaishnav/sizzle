@@ -23,7 +23,7 @@ from models import (
 logger = logging.getLogger("petpooja.revenue.advanced")
 
 
-def analyze_category_cannibalization(db: Session, lookback_days: int = 90) -> list[dict]:
+def analyze_category_cannibalization(db: Session, lookback_days: int = 90, restaurant_id: int = None) -> list[dict]:
     """
     Detect cannibalization within categories: when a newer item steals
     sales from existing items in the same category.
@@ -35,11 +35,12 @@ def analyze_category_cannibalization(db: Session, lookback_days: int = 90) -> li
     cutoff = now - timedelta(days=lookback_days)
     cutoff_naive = cutoff.replace(tzinfo=None)
 
-    categories = db.query(Category).filter(Category.is_active.is_(True)).all()
+    cat_q = db.query(Category).filter(Category.is_active.is_(True))
+    categories = cat_q.all()
     results = []
 
     for cat in categories:
-        items = [i for i in cat.items if i.is_available]
+        items = [i for i in cat.items if i.is_available and (not restaurant_id or i.restaurant_id == restaurant_id)]
         if len(items) < 2:
             continue
 
@@ -109,7 +110,7 @@ def analyze_category_cannibalization(db: Session, lookback_days: int = 90) -> li
     return results
 
 
-def estimate_price_sensitivity(db: Session) -> list[dict]:
+def estimate_price_sensitivity(db: Session, restaurant_id: int = None) -> list[dict]:
     """
     For Plowhorse items (high popularity, low margin) being considered
     for price increases, estimate the likely sales volume impact using
@@ -119,8 +120,8 @@ def estimate_price_sensitivity(db: Session) -> list[dict]:
     from .popularity import calculate_popularity
     from .menu_matrix import classify_menu_matrix
 
-    margins = calculate_margins(db)
-    popularity = calculate_popularity(db)
+    margins = calculate_margins(db, restaurant_id=restaurant_id)
+    popularity = calculate_popularity(db, restaurant_id=restaurant_id)
     matrix = classify_menu_matrix(margins, popularity)
 
     plowhorses = [m for m in matrix if m["quadrant"] == "plowhorse"]
@@ -175,7 +176,7 @@ def estimate_price_sensitivity(db: Session) -> list[dict]:
     return results
 
 
-def analyze_waste_and_voids(db: Session, days: int = 30) -> dict:
+def analyze_waste_and_voids(db: Session, days: int = 30, restaurant_id: int = None) -> dict:
     """
     Track waste through stock logs and order cancellations (voids).
 
@@ -191,7 +192,7 @@ def analyze_waste_and_voids(db: Session, days: int = 30) -> dict:
     cutoff = now - timedelta(days=days)
 
     # Waste from stock logs
-    waste_logs = (
+    waste_q = (
         db.query(
             Ingredient.name,
             func.sum(func.abs(StockLog.change_qty)).label("total_waste"),
@@ -203,6 +204,11 @@ def analyze_waste_and_voids(db: Session, days: int = 30) -> dict:
             StockLog.reason == "waste",
             StockLog.created_at >= cutoff,
         )
+    )
+    if restaurant_id:
+        waste_q = waste_q.filter(Ingredient.restaurant_id == restaurant_id)
+    waste_logs = (
+        waste_q
         .group_by(Ingredient.id, Ingredient.name, Ingredient.cost_per_unit, Ingredient.unit)
         .order_by(func.sum(func.abs(StockLog.change_qty)).desc())
         .all()
@@ -221,16 +227,20 @@ def analyze_waste_and_voids(db: Session, days: int = 30) -> dict:
         })
 
     # Voids: cancelled orders after KOT generation
+    order_base_filter = [Order.created_at >= cutoff]
+    if restaurant_id:
+        order_base_filter.append(Order.restaurant_id == restaurant_id)
+
     total_orders = (
         db.query(func.count(Order.id))
-        .filter(Order.created_at >= cutoff)
+        .filter(*order_base_filter)
         .scalar() or 0
     )
     cancelled_orders = (
         db.query(func.count(Order.id))
         .filter(
             Order.status == "cancelled",
-            Order.created_at >= cutoff,
+            *order_base_filter,
         )
         .scalar() or 0
     )
@@ -238,7 +248,7 @@ def analyze_waste_and_voids(db: Session, days: int = 30) -> dict:
     void_pct = (cancelled_orders / total_orders * 100) if total_orders > 0 else 0
 
     # Most voided items
-    voided_items = (
+    void_q = (
         db.query(
             MenuItem.name,
             func.sum(OrderItem.quantity).label("void_qty"),
@@ -249,6 +259,11 @@ def analyze_waste_and_voids(db: Session, days: int = 30) -> dict:
             Order.status == "cancelled",
             Order.created_at >= cutoff,
         )
+    )
+    if restaurant_id:
+        void_q = void_q.filter(Order.restaurant_id == restaurant_id)
+    voided_items = (
+        void_q
         .group_by(MenuItem.id, MenuItem.name)
         .order_by(func.sum(OrderItem.quantity).desc())
         .limit(10)
@@ -276,7 +291,7 @@ def analyze_waste_and_voids(db: Session, days: int = 30) -> dict:
     }
 
 
-def estimate_customer_return_rate(db: Session, days: int = 30) -> dict:
+def estimate_customer_return_rate(db: Session, days: int = 30, restaurant_id: int = None) -> dict:
     """
     Estimate repeat customer patterns using table number + time patterns.
     If the same table has orders at similar times on different days,
@@ -286,7 +301,7 @@ def estimate_customer_return_rate(db: Session, days: int = 30) -> dict:
     cutoff = now - timedelta(days=days)
 
     # Count orders per table
-    table_orders = (
+    table_q = (
         db.query(
             Order.table_number,
             func.count(Order.id).label("order_count"),
@@ -298,6 +313,11 @@ def estimate_customer_return_rate(db: Session, days: int = 30) -> dict:
             Order.status != "cancelled",
             Order.created_at >= cutoff,
         )
+    )
+    if restaurant_id:
+        table_q = table_q.filter(Order.restaurant_id == restaurant_id)
+    table_orders = (
+        table_q
         .group_by(Order.table_number)
         .all()
     )
@@ -334,7 +354,7 @@ def estimate_customer_return_rate(db: Session, days: int = 30) -> dict:
     }
 
 
-def calculate_menu_complexity(db: Session) -> list[dict]:
+def calculate_menu_complexity(db: Session, restaurant_id: int = None) -> list[dict]:
     """
     Calculate menu complexity score per category.
     Research shows menus with >7 items per category have lower per-item sales.
@@ -342,7 +362,7 @@ def calculate_menu_complexity(db: Session) -> list[dict]:
     """
     OPTIMAL_ITEMS = 7
 
-    categories = (
+    cat_q = (
         db.query(
             Category.id,
             Category.name,
@@ -350,20 +370,26 @@ def calculate_menu_complexity(db: Session) -> list[dict]:
         )
         .join(MenuItem, MenuItem.category_id == Category.id)
         .filter(Category.is_active.is_(True), MenuItem.is_available.is_(True))
+    )
+    if restaurant_id:
+        cat_q = cat_q.filter(MenuItem.restaurant_id == restaurant_id)
+    categories = (
+        cat_q
         .group_by(Category.id, Category.name)
         .all()
     )
 
     results = []
     for cat_id, cat_name, item_count in categories:
-        # Get per-item avg sales in this category
+        # Get per-item avg sales in this category (last 30 days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
         item_sales = (
             db.query(
                 MenuItem.id.label("item_id"),
                 func.coalesce(func.sum(VSale.quantity), 0).label("qty"),
             )
             .select_from(MenuItem)
-            .outerjoin(VSale, VSale.item_id == MenuItem.id)
+            .outerjoin(VSale, (VSale.item_id == MenuItem.id) & (VSale.sold_at >= cutoff))
             .filter(
                 MenuItem.category_id == cat_id,
                 MenuItem.is_available.is_(True),
@@ -401,7 +427,7 @@ def calculate_menu_complexity(db: Session) -> list[dict]:
     return results
 
 
-def calculate_operational_metrics(db: Session, days: int = 30) -> dict:
+def calculate_operational_metrics(db: Session, days: int = 30, restaurant_id: int = None) -> dict:
     """
     Operational metrics managers care about daily:
     - Average order value (AOV)
@@ -412,6 +438,13 @@ def calculate_operational_metrics(db: Session, days: int = 30) -> dict:
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days)
 
+    base_filter = [
+        Order.status != "cancelled",
+        Order.created_at >= cutoff,
+    ]
+    if restaurant_id:
+        base_filter.append(Order.restaurant_id == restaurant_id)
+
     # Average Order Value
     aov_result = (
         db.query(
@@ -419,10 +452,7 @@ def calculate_operational_metrics(db: Session, days: int = 30) -> dict:
             func.count(Order.id).label("total_orders"),
             func.sum(Order.total_amount).label("total_revenue"),
         )
-        .filter(
-            Order.status != "cancelled",
-            Order.created_at >= cutoff,
-        )
+        .filter(*base_filter)
         .first()
     )
 
@@ -437,10 +467,7 @@ def calculate_operational_metrics(db: Session, days: int = 30) -> dict:
             func.count(Order.id).label("order_count"),
             func.sum(Order.total_amount).label("revenue"),
         )
-        .filter(
-            Order.status != "cancelled",
-            Order.created_at >= cutoff,
-        )
+        .filter(*base_filter)
         .group_by(func.extract("hour", Order.created_at))
         .order_by(func.count(Order.id).desc())
         .all()
@@ -463,10 +490,7 @@ def calculate_operational_metrics(db: Session, days: int = 30) -> dict:
             func.count(Order.id).label("count"),
             func.sum(Order.total_amount).label("revenue"),
         )
-        .filter(
-            Order.status != "cancelled",
-            Order.created_at >= cutoff,
-        )
+        .filter(*base_filter)
         .group_by(Order.order_type)
         .all()
     )

@@ -343,8 +343,8 @@ export default function Dashboard() {
             </div>
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', maxWidth: 420 }}>
-            {priceInsight.usedSynthetic
-              ? 'Using display-only synthetic recommendations because order history is limited.'
+            {priceInsight.insufficientData && priceInsight.opportunities.length === 0
+              ? 'Not enough order history to generate price recommendations yet.'
               : 'Recommendations are based on BCG quadrant behavior, margin signals, and bundle opportunities.'}
           </div>
         </div>

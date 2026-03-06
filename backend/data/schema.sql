@@ -135,6 +135,7 @@ CREATE INDEX idx_orders_staff ON orders (staff_id);
 
 CREATE TABLE restaurant_tables (
     id                  SERIAL PRIMARY KEY,
+    restaurant_id       INTEGER NOT NULL REFERENCES restaurants(id),
     table_number        VARCHAR(10) UNIQUE NOT NULL,
     capacity            INTEGER NOT NULL DEFAULT 4,
     section             VARCHAR(50) DEFAULT 'main',   -- main | patio | private | bar
