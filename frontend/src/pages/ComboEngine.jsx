@@ -102,10 +102,10 @@ export default function ComboEngine() {
         </div>
       </div>
 
-      {insights.usedSynthetic && (
+      {insights.insufficientData && (
         <div className="card" style={{ marginBottom: 'var(--space-4)', borderColor: 'var(--warning)' }}>
           <div className="card-body" style={{ fontSize: 13 }}>
-            Limited order history detected (under 30 records). Showing realistic demo combos from a display-only synthetic model.
+            Limited order history detected (under 30 records). Combo recommendations will improve as more orders are placed.
           </div>
         </div>
       )}
@@ -165,38 +165,24 @@ export default function ComboEngine() {
       </section>
 
       <section>
-        <h2 style={{ marginBottom: 'var(--space-3)' }}>Promoted Combo Performance</h2>
-        {insights.promotedPerformance.length === 0 ? (
+        <h2 style={{ marginBottom: 'var(--space-3)' }}>Promoted Combos</h2>
+        {insights.promotedIds.length === 0 ? (
           <div className="card">
             <div className="card-body">
-              Promote at least one combo to start tracking performance metrics.
+              Promote at least one combo above to highlight it for your staff during order-taking.
             </div>
           </div>
         ) : (
           <div className="card">
-            <div className="card-body" style={{ padding: 0 }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Combo Name</th>
-                    <th style={{ textAlign: 'right' }}>Times Suggested</th>
-                    <th style={{ textAlign: 'right' }}>Times Accepted</th>
-                    <th style={{ textAlign: 'right' }}>Acceptance Rate</th>
-                    <th style={{ textAlign: 'right' }}>Revenue Attributed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {insights.promotedPerformance.map((row) => (
-                    <tr key={row.id}>
-                      <td style={{ fontWeight: 600 }}>{row.comboName}</td>
-                      <td className="col-number">{row.timesSuggested}</td>
-                      <td className="col-number">{row.timesAccepted}</td>
-                      <td className="col-number">{formatPct(row.acceptanceRate)}</td>
-                      <td className="col-number">{formatRupees(row.revenueAttributed)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="card-body">
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>Currently promoted combos:</div>
+              <ul style={{ margin: 0, paddingLeft: 20 }}>
+                {insights.combos.filter((c) => c.isPromoted).map((combo) => (
+                  <li key={combo.id} style={{ marginBottom: 4 }}>
+                    {combo.itemNames.join(' + ')} — Bundle at {formatRupees(combo.bundlePrice)}
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
         )}

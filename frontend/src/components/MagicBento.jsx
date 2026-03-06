@@ -1,6 +1,8 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowRight } from '@phosphor-icons/react'
+import { formatRupeesShort } from '../utils/format'
+import { NUMBER_LOCALE } from '../config'
 import './MagicBento.css'
 
 const DEFAULT_PARTICLE_COUNT = 12
@@ -333,7 +335,7 @@ export default function MagicBento({ metrics, secondaryLoaded }) {
             label: 'Revenue',
             kpiValue: metrics?.total_revenue,
             kpiLabel: 'Total Revenue',
-            formatKpi: v => `₹${v >= 100000 ? (v / 100000).toFixed(1) + 'L' : v >= 1000 ? (v / 1000).toFixed(1) + 'K' : v}`,
+            formatKpi: v => formatRupeesShort(v),
             to: '/dashboard',
         },
         {
@@ -371,7 +373,7 @@ export default function MagicBento({ metrics, secondaryLoaded }) {
             label: 'Customers',
             kpiValue: metrics?.total_orders,
             kpiLabel: 'Orders (30d)',
-            formatKpi: v => v?.toLocaleString('en-IN'),
+            formatKpi: v => v?.toLocaleString(NUMBER_LOCALE),
             to: '/dashboard/orders',
         },
         {

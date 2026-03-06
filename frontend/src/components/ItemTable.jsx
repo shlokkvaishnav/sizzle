@@ -1,4 +1,5 @@
 import { memo, useMemo, useState } from 'react'
+import { useThresholds } from '../context/SettingsContext'
 
 const QUADRANT_META = {
   star: { label: 'Star', icon: '⭐', tagClass: 'tag-star' },
@@ -8,8 +9,9 @@ const QUADRANT_META = {
 }
 
 function ItemTable({ items, categoryFilter, quadrantFilter }) {
-  const [sortBy, setSortBy] = useState('cm_percent')
+  const [sortBy, setSortBy] = useState('margin_pct')
   const [sortDir, setSortDir] = useState('desc')
+  const thresholds = useThresholds()
 
   if (!items || items.length === 0) {
     return <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>No items to display</div>
@@ -41,8 +43,8 @@ function ItemTable({ items, categoryFilter, quadrantFilter }) {
   const sortIcon = (column) => (sortBy === column ? (sortDir === 'desc' ? ' ↓' : ' ↑') : '')
 
   const cmColor = (value) => {
-    if (value >= 65) return 'var(--success)'
-    if (value >= 50) return 'var(--warning)'
+    if (value >= thresholds.cm_green_min) return 'var(--success)'
+    if (value >= thresholds.cm_yellow_min) return 'var(--warning)'
     return 'var(--danger)'
   }
 
@@ -78,13 +80,12 @@ function ItemTable({ items, categoryFilter, quadrantFilter }) {
                   <div style={{ width: 3, height: 28, borderRadius: 2, background: cmColor(marginPct), flexShrink: 0 }} />
                   <div>
                     <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>{item.name}</div>
-                    {item.name_hi && <div className="item-subtitle-hi">{item.name_hi}</div>}
                   </div>
                 </div>
               </td>
               <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.category}</td>
               <td className="col-number" style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
-                INR {item.selling_price}
+                ₹{item.selling_price}
               </td>
               <td className="col-number">
                 <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 13, color: cmColor(marginPct) }}>

@@ -9,6 +9,7 @@ advanced analytics
 import logging
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from database import get_db
-from models import MenuItem, VSale, Category
+from models import MenuItem, VSale, Category, RestaurantSettings
 from modules.revenue.analyzer import run_full_analysis
 from modules.revenue.analyzer import _calculate_health_score
 from modules.revenue.contribution_margin import calculate_margins
@@ -41,6 +42,23 @@ from modules.revenue.advanced_analytics import (
 
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.revenue")
+
+# ── Default thresholds (fallback if no settings) ──
+DEFAULT_THRESHOLDS = {
+    "risk_margin_max": 40,
+    "risk_popularity_min": 0.5,
+}
+
+
+def _get_thresholds(db: Session, restaurant_id: int | None) -> dict:
+    """Load display_thresholds from the restaurant settings, falling back to defaults."""
+    if restaurant_id:
+        row = db.query(RestaurantSettings).filter(
+            RestaurantSettings.restaurant_id == restaurant_id
+        ).first()
+        if row and row.display_thresholds:
+            return {**DEFAULT_THRESHOLDS, **row.display_thresholds}
+    return DEFAULT_THRESHOLDS
 
 # ── Thread-safe cache for expensive computations ──
 _cache_lock = threading.Lock()
@@ -116,6 +134,7 @@ def get_dashboard(restaurant_id: int = Query(None), db: Session = Depends(get_db
         margins, popularity = _get_margins_popularity(db, restaurant_id=restaurant_id)
         matrix = classify_menu_matrix(margins, popularity)
         hidden_stars_list = detect_hidden_stars(margins, popularity)
+        thresholds = _get_thresholds(db, restaurant_id)
 
         total_items = len(margins)
         avg_margin = (
@@ -124,7 +143,8 @@ def get_dashboard(restaurant_id: int = Query(None), db: Session = Depends(get_db
             else 0
         )
 
-        rev_q = db.query(func.sum(VSale.total_price))
+        cutoff_30d = datetime.now(timezone.utc) - timedelta(days=30)
+        rev_q = db.query(func.sum(VSale.total_price)).filter(VSale.sold_at >= cutoff_30d)
         if restaurant_id:
             rev_q = rev_q.filter(VSale.restaurant_id == restaurant_id)
         total_revenue = rev_q.scalar() or 0.0
@@ -132,7 +152,8 @@ def get_dashboard(restaurant_id: int = Query(None), db: Session = Depends(get_db
         items_at_risk = sum(
             1 for m in matrix
             if m.get("quadrant") == "dog" or (
-                m.get("margin_pct", 100) < 40 and m.get("popularity_score", 0) > 0.5
+                m.get("margin_pct", 100) < thresholds["risk_margin_max"]
+                and m.get("popularity_score", 0) > thresholds["risk_popularity_min"]
             )
         )
 
@@ -147,7 +168,7 @@ def get_dashboard(restaurant_id: int = Query(None), db: Session = Depends(get_db
         )
 
         # Operational metrics
-        ops = calculate_operational_metrics(db)
+        ops = calculate_operational_metrics(db, restaurant_id=restaurant_id)
 
         result = {
             "total_revenue": round(total_revenue, 2),
@@ -237,13 +258,16 @@ def get_risk_items(
         def _compute():
             margins, popularity = _get_margins_popularity(db, restaurant_id=restaurant_id)
             matrix = classify_menu_matrix(margins, popularity)
+            thresholds = _get_thresholds(db, restaurant_id)
+            margin_max = thresholds["risk_margin_max"]
+            pop_min = thresholds["risk_popularity_min"]
 
             risk_items = []
             for item in matrix:
                 cm = item.get("margin_pct", 100)
                 pop = item.get("popularity_score", 0)
 
-                if cm < 40 and pop > 0.5:
+                if cm < margin_max and pop > pop_min:
                     risk_score = round((100 - cm) * pop, 1)
                     risk_items.append({
                         **item,
@@ -268,6 +292,7 @@ def get_risk_items(
 def get_combo_suggestions(
     force_retrain: bool = Query(False),
     discount_pct: float = Query(10.0, ge=1.0, le=30.0),
+    restaurant_id: int = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -281,7 +306,7 @@ def get_combo_suggestions(
             # Keep GET endpoint backward compatible while allowing explicit refresh from UI.
             from database import SessionLocal
             run_combo_training_background(SessionLocal)
-        combos = fetch_combos_from_db(db)
+        combos = fetch_combos_from_db(db, restaurant_id=restaurant_id)
         return {"combos": combos}
     except Exception as e:
         logger.exception("Error fetching combos")
@@ -341,6 +366,7 @@ def get_category_breakdown(
 
         def _compute():
             # Single query: aggregate revenue and units per category
+            cutoff_30d = datetime.now(timezone.utc) - timedelta(days=30)
             q = (
                 db.query(
                     Category.id,
@@ -353,7 +379,7 @@ def get_category_breakdown(
                     func.avg(MenuItem.selling_price).label("avg_price"),
                 )
                 .join(MenuItem, MenuItem.category_id == Category.id)
-                .outerjoin(VSale, VSale.item_id == MenuItem.id)
+                .outerjoin(VSale, (VSale.item_id == MenuItem.id) & (VSale.sold_at >= cutoff_30d))
                 .filter(Category.is_active == True, MenuItem.is_available == True)
             )
             if restaurant_id:
@@ -389,74 +415,77 @@ def get_category_breakdown(
 # ── Keep backward-compatible endpoints ──
 
 @router.get("/analyze")
-def full_analysis(db: Session = Depends(get_db)):
+def full_analysis(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """Run the complete revenue intelligence pipeline."""
-    return run_full_analysis(db)
+    return run_full_analysis(db, restaurant_id=restaurant_id)
 
 
 @router.get("/margins")
-def get_margins(db: Session = Depends(get_db)):
+def get_margins(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """Get contribution margins for all items."""
-    margins, _ = _get_margins_popularity(db)
+    margins, _ = _get_margins_popularity(db, restaurant_id=restaurant_id)
     return {"items": margins}
 
 
 @router.get("/popularity")
-def get_popularity(db: Session = Depends(get_db)):
+def get_popularity(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """Get popularity/velocity scores for all items."""
-    _, popularity = _get_margins_popularity(db)
+    _, popularity = _get_margins_popularity(db, restaurant_id=restaurant_id)
     return {"items": popularity}
 
 
 @router.get("/matrix")
-def get_matrix_legacy(db: Session = Depends(get_db)):
+def get_matrix_legacy(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """Legacy endpoint — redirects to /menu-matrix."""
-    return get_menu_matrix(db)
+    return get_menu_matrix(restaurant_id=restaurant_id, db=db)
 
 
 @router.get("/pricing")
-def get_pricing_legacy(db: Session = Depends(get_db)):
+def get_pricing_legacy(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """Legacy endpoint — redirects to /price-recommendations."""
-    margins, popularity = _get_margins_popularity(db)
+    margins, popularity = _get_margins_popularity(db, restaurant_id=restaurant_id)
     return {"recommendations": generate_price_recommendations(margins, popularity)}
 
 
 # ── Trend & Time-Series Endpoints ──
 
 @router.get("/trends")
-def get_trends(db: Session = Depends(get_db)):
+def get_trends(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """
     GET /api/revenue/trends
     Returns: item_trends (30/60/90 day), category_trends, seasonal_patterns, quadrant_drift
     """
     try:
-        return _get_or_compute("trends", lambda: calculate_trends(db))
+        cache_key = f"trends_{restaurant_id}" if restaurant_id else "trends"
+        return _get_or_compute(cache_key, lambda: calculate_trends(db, restaurant_id=restaurant_id))
     except Exception as e:
         logger.exception("Error computing trends")
         raise HTTPException(status_code=500, detail=f"Trend analysis failed: {e}")
 
 
 @router.get("/trends/wow-mom")
-def get_wow_mom(db: Session = Depends(get_db)):
+def get_wow_mom(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """
     GET /api/revenue/trends/wow-mom
     Returns: per-item week-over-week and month-over-month revenue changes
     """
     try:
-        return _get_or_compute("wow_mom", lambda: {"items": calculate_wow_mom(db)})
+        cache_key = f"wow_mom_{restaurant_id}" if restaurant_id else "wow_mom"
+        return _get_or_compute(cache_key, lambda: {"items": calculate_wow_mom(db, restaurant_id=restaurant_id)})
     except Exception as e:
         logger.exception("Error computing WoW/MoM")
         raise HTTPException(status_code=500, detail=f"WoW/MoM analysis failed: {e}")
 
 
 @router.get("/trends/price-elasticity")
-def get_price_elasticity(db: Session = Depends(get_db)):
+def get_price_elasticity(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """
     GET /api/revenue/trends/price-elasticity
     Returns: items where price changes were detected with elasticity estimates
     """
     try:
-        return _get_or_compute("price_elasticity", lambda: {"items": estimate_price_elasticity(db)})
+        cache_key = f"price_elasticity_{restaurant_id}" if restaurant_id else "price_elasticity"
+        return _get_or_compute(cache_key, lambda: {"items": estimate_price_elasticity(db, restaurant_id=restaurant_id)})
     except Exception as e:
         logger.exception("Error estimating price elasticity")
         raise HTTPException(status_code=500, detail=f"Price elasticity failed: {e}")
@@ -466,6 +495,7 @@ def get_price_elasticity(db: Session = Depends(get_db)):
 
 @router.get("/analytics/cannibalization")
 def get_cannibalization(
+    restaurant_id: int = Query(None),
     db: Session = Depends(get_db),
     days: int = Query(90, ge=30, le=365),
 ):
@@ -474,21 +504,22 @@ def get_cannibalization(
     Returns: items where new additions are cannibalizing existing items
     """
     try:
-        cache_key = f"cannibalization_{days}"
-        return _get_or_compute(cache_key, lambda: {"items": analyze_category_cannibalization(db, lookback_days=days)})
+        cache_key = f"cannibalization_{restaurant_id}_{days}" if restaurant_id else f"cannibalization_{days}"
+        return _get_or_compute(cache_key, lambda: {"items": analyze_category_cannibalization(db, lookback_days=days, restaurant_id=restaurant_id)})
     except Exception as e:
         logger.exception("Error analyzing cannibalization")
         raise HTTPException(status_code=500, detail=f"Cannibalization analysis failed: {e}")
 
 
 @router.get("/analytics/price-sensitivity")
-def get_price_sensitivity(db: Session = Depends(get_db)):
+def get_price_sensitivity(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """
     GET /api/revenue/analytics/price-sensitivity
     Returns: plowhorse items with price increase scenarios and projected impact
     """
     try:
-        return _get_or_compute("price_sensitivity", lambda: {"items": estimate_price_sensitivity(db)})
+        cache_key = f"price_sensitivity_{restaurant_id}" if restaurant_id else "price_sensitivity"
+        return _get_or_compute(cache_key, lambda: {"items": estimate_price_sensitivity(db, restaurant_id=restaurant_id)})
     except Exception as e:
         logger.exception("Error estimating price sensitivity")
         raise HTTPException(status_code=500, detail=f"Price sensitivity failed: {e}")
@@ -496,6 +527,7 @@ def get_price_sensitivity(db: Session = Depends(get_db)):
 
 @router.get("/analytics/waste")
 def get_waste_analysis(
+    restaurant_id: int = Query(None),
     db: Session = Depends(get_db),
     days: int = Query(30, ge=7, le=365),
 ):
@@ -504,8 +536,8 @@ def get_waste_analysis(
     Returns: waste costs, void rates, top wasted ingredients, top voided items
     """
     try:
-        cache_key = f"waste_{days}"
-        return _get_or_compute(cache_key, lambda: analyze_waste_and_voids(db, days=days))
+        cache_key = f"waste_{restaurant_id}_{days}" if restaurant_id else f"waste_{days}"
+        return _get_or_compute(cache_key, lambda: analyze_waste_and_voids(db, days=days, restaurant_id=restaurant_id))
     except Exception as e:
         logger.exception("Error analyzing waste")
         raise HTTPException(status_code=500, detail=f"Waste analysis failed: {e}")
@@ -513,6 +545,7 @@ def get_waste_analysis(
 
 @router.get("/analytics/customer-returns")
 def get_customer_returns(
+    restaurant_id: int = Query(None),
     db: Session = Depends(get_db),
     days: int = Query(30, ge=7, le=365),
 ):
@@ -521,28 +554,30 @@ def get_customer_returns(
     Returns: estimated repeat customer rates based on table patterns
     """
     try:
-        cache_key = f"customer_returns_{days}"
-        return _get_or_compute(cache_key, lambda: estimate_customer_return_rate(db, days=days))
+        cache_key = f"customer_returns_{restaurant_id}_{days}" if restaurant_id else f"customer_returns_{days}"
+        return _get_or_compute(cache_key, lambda: estimate_customer_return_rate(db, days=days, restaurant_id=restaurant_id))
     except Exception as e:
         logger.exception("Error estimating customer returns")
         raise HTTPException(status_code=500, detail=f"Customer return analysis failed: {e}")
 
 
 @router.get("/analytics/menu-complexity")
-def get_menu_complexity(db: Session = Depends(get_db)):
+def get_menu_complexity(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """
     GET /api/revenue/analytics/menu-complexity
     Returns: per-category complexity scores and alerts when >7 items
     """
     try:
-        return _get_or_compute("menu_complexity", lambda: {"categories": calculate_menu_complexity(db)})
+        cache_key = f"menu_complexity_{restaurant_id}" if restaurant_id else "menu_complexity"
+        return _get_or_compute(cache_key, lambda: {"categories": calculate_menu_complexity(db, restaurant_id=restaurant_id)})
     except Exception as e:
         logger.exception("Error computing menu complexity")
         raise HTTPException(status_code=500, detail=f"Menu complexity failed: {e}")
 
 
 @router.get("/analytics/operational")
-def get_operational_metrics(
+def get_operational_metrics_endpoint(
+    restaurant_id: int = Query(None),
     db: Session = Depends(get_db),
     days: int = Query(30, ge=7, le=365),
 ):
@@ -551,8 +586,8 @@ def get_operational_metrics(
     Returns: AOV, peak hours, orders by type, total stats
     """
     try:
-        cache_key = f"operational_{days}"
-        return _get_or_compute(cache_key, lambda: calculate_operational_metrics(db, days=days))
+        cache_key = f"operational_{restaurant_id}_{days}" if restaurant_id else f"operational_{days}"
+        return _get_or_compute(cache_key, lambda: calculate_operational_metrics(db, days=days, restaurant_id=restaurant_id))
     except Exception as e:
         logger.exception("Error computing operational metrics")
         raise HTTPException(status_code=500, detail=f"Operational metrics failed: {e}")

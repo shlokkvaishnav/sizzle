@@ -17,7 +17,7 @@ from .trend_analyzer import calculate_trends, calculate_wow_mom
 from .advanced_analytics import calculate_operational_metrics
 
 
-def run_full_analysis(db: Session) -> dict:
+def run_full_analysis(db: Session, restaurant_id: int = None) -> dict:
     """
     Run the complete revenue intelligence pipeline.
 
@@ -32,10 +32,10 @@ def run_full_analysis(db: Session) -> dict:
     - summary: overall menu health metrics (with breakdown)
     """
     # Step 1: Contribution margins
-    margins = calculate_margins(db)
+    margins = calculate_margins(db, restaurant_id=restaurant_id)
 
     # Step 2: Popularity / velocity
-    popularity = calculate_popularity(db)
+    popularity = calculate_popularity(db, restaurant_id=restaurant_id)
 
     # Step 3: BCG matrix classification (needs both margins + popularity)
     matrix = classify_menu_matrix(margins, popularity)
@@ -50,7 +50,7 @@ def run_full_analysis(db: Session) -> dict:
     price_recs = generate_price_recommendations(margins, popularity)
 
     # Step 7: Time-series trends
-    trends = calculate_trends(db)
+    trends = calculate_trends(db, restaurant_id=restaurant_id)
 
     # Summary metrics
     total_items = len(margins)

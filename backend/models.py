@@ -70,6 +70,7 @@ class RestaurantSettings(Base):
     security = Column(JSON, default=dict)
     voice_ai_config = Column(JSON, default=dict)
     profile_extras = Column(JSON, default=dict)  # operating_hours, gst_number, etc.
+    display_thresholds = Column(JSON, default=dict)  # cm%, risk, confidence thresholds
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     restaurant = relationship("Restaurant", back_populates="settings")
@@ -84,12 +85,14 @@ class RestaurantTable(Base):
     __tablename__ = "restaurant_tables"
 
     id = Column(Integer, primary_key=True, index=True)
-    table_number = Column(String(10), unique=True, nullable=False)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=False)
+    table_number = Column(String(10), nullable=False)
     capacity = Column(Integer, nullable=False, default=4)
     section = Column(String(50), default="main")  # main | patio | private | bar
     status = Column(String(20), default="empty")  # empty | occupied | reserved | cleaning
     current_order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
 
+    restaurant = relationship("Restaurant")
     current_order = relationship("Order", foreign_keys=[current_order_id])
 
     __table_args__ = (
@@ -245,7 +248,9 @@ class Ingredient(Base):
     __tablename__ = "ingredients"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(150), unique=True, nullable=False)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
+    name = Column(String(150), nullable=False)
+    category = Column(String(50), nullable=True, default="Other")
     unit = Column(String(20), nullable=False, default="g")  # g | kg | ml | L | pcs
     current_stock = Column(Float, nullable=False, default=0.0)
     reorder_level = Column(Float, nullable=False, default=0.0)  # alert when stock <= this

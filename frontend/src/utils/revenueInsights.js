@@ -53,60 +53,7 @@ function matchMenuItemsByNames(menuItems, names = []) {
     .filter(Boolean)
 }
 
-function chooseFallback(menuItems, matcher, fallbackName) {
-  const found = menuItems.find(matcher)
-  if (found) return found
-  return menuItems.find((i) => safeName(i) !== fallbackName) || menuItems[0] || {
-    item_id: Math.random(),
-    name: fallbackName,
-    selling_price: 199,
-    cm_percent: 68,
-    category: 'Main Course',
-  }
-}
 
-function syntheticCombos(menuItems = []) {
-  const biryani = chooseFallback(menuItems, (i) => /biryani/.test(lower(safeName(i))), 'Chicken Biryani')
-  const raita = chooseFallback(menuItems, (i) => /raita/.test(lower(safeName(i))), 'Boondi Raita')
-  const cola = chooseFallback(menuItems, (i) => /(cola|soda|coke|beverage|lassi)/.test(lower(safeName(i))), 'Masala Cola')
-
-  const butterChicken = chooseFallback(menuItems, (i) => /butter chicken/.test(lower(safeName(i))), 'Butter Chicken')
-  const naan = chooseFallback(menuItems, (i) => /(naan|bread|roti|kulcha)/.test(lower(safeName(i))), 'Butter Naan')
-  const gulab = chooseFallback(menuItems, (i) => /(gulab|jamun|dessert|sweet)/.test(lower(safeName(i))), 'Gulab Jamun')
-
-  const paneer = chooseFallback(menuItems, (i) => /(paneer|tikka|kebab)/.test(lower(safeName(i))), 'Paneer Tikka')
-  const mojito = chooseFallback(menuItems, (i) => /(lime|mojito|drink|beverage)/.test(lower(safeName(i))), 'Mint Lime Soda')
-
-  return [
-    {
-      combo_id: 'SYN-001',
-      source: 'synthetic',
-      item_names: [safeName(biryani), safeName(raita), safeName(cola)],
-      item_prices: [price(biryani) || 340, price(raita) || 90, price(cola) || 80],
-      confidence: 0.81,
-      support: 0.29,
-      lift: 2.2,
-    },
-    {
-      combo_id: 'SYN-002',
-      source: 'synthetic',
-      item_names: [safeName(butterChicken), safeName(naan), safeName(gulab)],
-      item_prices: [price(butterChicken) || 360, price(naan) || 60, price(gulab) || 110],
-      confidence: 0.76,
-      support: 0.22,
-      lift: 1.9,
-    },
-    {
-      combo_id: 'SYN-003',
-      source: 'synthetic',
-      item_names: [safeName(paneer), safeName(naan), safeName(mojito)],
-      item_prices: [price(paneer) || 290, price(naan) || 60, price(mojito) || 120],
-      confidence: 0.73,
-      support: 0.2,
-      lift: 1.8,
-    },
-  ]
-}
 
 function normalizeCombo(combo, index, menuItems = []) {
   const names = Array.isArray(combo.item_names) && combo.item_names.length
@@ -154,29 +101,12 @@ export function buildComboInsights({
   totalOrders = 0,
   promotedIds = [],
 }) {
-  const syntheticRequired = shouldUseSynthetic(totalOrders)
-  const base = syntheticRequired || !Array.isArray(combos) || combos.length === 0
-    ? syntheticCombos(menuItems)
-    : combos
+  const insufficientData = shouldUseSynthetic(totalOrders)
+  const base = !Array.isArray(combos) || combos.length === 0 ? [] : combos
 
   const normalized = base.map((combo, idx) => normalizeCombo(combo, idx, menuItems))
   const promotedSet = new Set(promotedIds || [])
   const withState = normalized.map((combo) => ({ ...combo, isPromoted: promotedSet.has(combo.id) }))
-
-  const promotedRows = withState.filter((c) => c.isPromoted).map((combo, idx) => {
-    const timesSuggested = Math.max(18, Math.round(combo.support * 220) + idx * 7)
-    const timesAccepted = Math.max(4, Math.round(timesSuggested * Math.min(combo.confidence, 0.7)))
-    const acceptanceRate = timesSuggested ? (timesAccepted / timesSuggested) * 100 : 0
-    const avgBill = combo.bundlePrice || combo.combinedPrice
-    return {
-      id: combo.id,
-      comboName: combo.itemNames.join(' + '),
-      timesSuggested,
-      timesAccepted,
-      acceptanceRate,
-      revenueAttributed: timesAccepted * avgBill,
-    }
-  })
 
   const avgUplift = withState.length
     ? withState.reduce((sum, c) => sum + c.aovUpliftPct, 0) / withState.length
@@ -184,13 +114,13 @@ export function buildComboInsights({
 
   return {
     combos: withState,
-    usedSynthetic: syntheticRequired,
+    insufficientData,
     summary: {
       totalCombos: withState.length,
       avgAovUpliftPct: avgUplift,
       activePromoted: withState.filter((c) => c.isPromoted).length,
     },
-    promotedPerformance: promotedRows,
+    promotedIds: [...promotedSet],
   }
 }
 
@@ -258,28 +188,12 @@ export function buildUpsellCandidates({
     }
   }
 
-  let finalList = chosen.slice(0, limit).map((item) => ({
+  return chosen.slice(0, limit).map((item) => ({
     ...item,
     reason: item.popularity_score < 0.45
       ? 'High margin, low visibility - ideal to suggest at order time'
       : 'Strong margin in a high-order category - good upsell fit',
   }))
-
-  if (finalList.length < limit) {
-    const synthetic = [
-      { item_id: 'syn-upsell-1', name: 'Butter Naan', price: 55, cm_percent: 71, reason: 'High margin, low visibility - ideal to suggest at order time' },
-      { item_id: 'syn-upsell-2', name: 'Masala Buttermilk', price: 79, cm_percent: 74, reason: 'High margin in a high-order category - easy add-on with mains' },
-      { item_id: 'syn-upsell-3', name: 'Gulab Jamun', price: 99, cm_percent: 69, reason: 'Dessert add-on with strong attachment potential after main course' },
-    ]
-    for (const row of synthetic) {
-      if (!finalList.find((x) => lower(x.name) === lower(row.name))) {
-        finalList.push(row)
-      }
-      if (finalList.length >= limit) break
-    }
-  }
-
-  return finalList.slice(0, limit)
 }
 
 export function buildPriceOpportunities({
@@ -310,24 +224,41 @@ export function buildPriceOpportunities({
     const avg = categoryAvg.get(lower(item.category || 'uncategorized')) || p
 
     if (q === 'star' && pop > 0.7 && p <= avg * 0.85) {
+      const increasePct = 8
+      const newPrice = Math.round((p * (1 + increasePct / 100)) / 5) * 5
+      const cmImpactLow = Math.round((newPrice - p) / p * 100)
+      const cmImpactHigh = cmImpactLow + 3
+      const volImpactHigh = -Math.round(increasePct * 0.12)
+      const volImpactLow = -Math.round(increasePct * 0.38)
       opportunities.push({
         id: `inc-${item.item_id}`,
+        item_id: item.item_id,
         item_name: safeName(item),
         current_price: p,
-        suggested_action: `Increase to Rs ${Math.round((p * 1.08) / 5) * 5}`,
-        expected_cm_impact: '+3% to +6%',
-        expected_volume_impact: '-1% to -3%',
+        suggested_price: newPrice,
+        suggested_action: `Increase to Rs ${newPrice}`,
+        expected_cm_impact: `+${cmImpactLow}% to +${cmImpactHigh}%`,
+        expected_volume_impact: `${volImpactLow}% to ${volImpactHigh}%`,
         confidence_level: 'High',
       })
     }
     if (q === 'plowhorse' && pop > 0.65 && cm < 50) {
+      const decreasePct = 4
+      const newPrice = Math.max(10, Math.round((p * (1 - decreasePct / 100)) / 5) * 5)
+      const priceDiff = p - newPrice
+      const cmImpactLow = -Math.round(priceDiff / p * 100)
+      const cmImpactHigh = cmImpactLow + 1
+      const volImpactLow = Math.round(decreasePct * 1.0)
+      const volImpactHigh = Math.round(decreasePct * 2.25)
       opportunities.push({
         id: `dec-${item.item_id}`,
+        item_id: item.item_id,
         item_name: safeName(item),
         current_price: p,
-        suggested_action: `Decrease to Rs ${Math.max(10, Math.round((p * 0.96) / 5) * 5)}`,
-        expected_cm_impact: '-1% to -2%',
-        expected_volume_impact: '+4% to +9%',
+        suggested_price: newPrice,
+        suggested_action: `Decrease to Rs ${newPrice}`,
+        expected_cm_impact: `${cmImpactLow}% to ${cmImpactHigh > 0 ? '+' : ''}${cmImpactHigh}%`,
+        expected_volume_impact: `+${volImpactLow}% to +${volImpactHigh}%`,
         confidence_level: 'Medium',
       })
     }
@@ -340,13 +271,18 @@ export function buildPriceOpportunities({
     const ma = marginByName.get(lower(a)) || 0
     const mb = marginByName.get(lower(b)) || 0
     if ((ma >= 65 || mb >= 65) && combo.confidence >= 0.58) {
+      const discountFrac = combo.combinedPrice > 0 ? (combo.combinedPrice - combo.bundlePrice) / combo.combinedPrice : 0
+      const cmImpactLow = Math.round(discountFrac * 100 * 0.3)
+      const cmImpactHigh = Math.round(discountFrac * 100 * 0.8)
+      const volImpactLow = Math.round(combo.confidence * 8)
+      const volImpactHigh = Math.round(combo.confidence * 18)
       opportunities.push({
         id: `bundle-${combo.id}`,
         item_name: `${a} + ${b}`,
         current_price: combo.combinedPrice,
         suggested_action: `Bundle at Rs ${combo.bundlePrice}`,
-        expected_cm_impact: '+2% to +5%',
-        expected_volume_impact: '+5% to +12%',
+        expected_cm_impact: `+${cmImpactLow}% to +${cmImpactHigh}%`,
+        expected_volume_impact: `+${volImpactLow}% to +${volImpactHigh}%`,
         confidence_level: confidenceLevel(combo.confidence),
       })
     }
@@ -355,17 +291,30 @@ export function buildPriceOpportunities({
   if (Array.isArray(apiRecommendations) && apiRecommendations.length > 0) {
     for (const rec of apiRecommendations.slice(0, 4)) {
       const suggested = num(rec.recommended_price ?? rec.suggested_price, num(rec.current_price))
+      const currentP = num(rec.current_price)
+      const priceDelta = currentP > 0 ? Math.abs(suggested - currentP) / currentP * 100 : 0
+      let apiCmImpact, apiVolImpact
+      if (rec.direction === 'decrease') {
+        apiCmImpact = `-${Math.round(priceDelta * 0.3)}% to +${Math.max(1, Math.round(priceDelta * 0.15))}%`
+        apiVolImpact = `+${Math.round(priceDelta * 0.6)}% to +${Math.round(priceDelta * 1.5)}%`
+      } else if (rec.direction === 'hold') {
+        apiCmImpact = '0%'
+        apiVolImpact = '0%'
+      } else {
+        apiCmImpact = `+${Math.round(priceDelta * 0.4)}% to +${Math.round(priceDelta * 0.9)}%`
+        apiVolImpact = `-${Math.round(priceDelta * 0.3)}% to +${Math.max(1, Math.round(priceDelta * 0.2))}%`
+      }
       opportunities.push({
         id: `api-${rec.item_id || rec.name}`,
         item_name: rec.name || rec.item_name || 'Menu Item',
-        current_price: num(rec.current_price),
+        current_price: currentP,
         suggested_action: rec.direction === 'decrease'
           ? `Decrease to Rs ${Math.round(suggested)}`
           : rec.direction === 'hold'
             ? `Maintain at Rs ${Math.round(suggested)}`
             : `Increase to Rs ${Math.round(suggested)}`,
-        expected_cm_impact: rec.direction === 'decrease' ? '-1% to +1%' : '+2% to +5%',
-        expected_volume_impact: rec.direction === 'decrease' ? '+3% to +8%' : '-2% to +2%',
+        expected_cm_impact: apiCmImpact,
+        expected_volume_impact: apiVolImpact,
         confidence_level: confidenceLevel(num(rec.confidence)),
       })
     }
@@ -381,39 +330,10 @@ export function buildPriceOpportunities({
     }
   }
 
-  const syntheticNeeded = shouldUseSynthetic(totalOrders) || deduped.length === 0
-  const syntheticRows = [
-    {
-      id: 'syn-price-1',
-      item_name: 'Chicken Biryani',
-      current_price: 329,
-      suggested_action: 'Increase to Rs 349',
-      expected_cm_impact: '+4% to +7%',
-      expected_volume_impact: '-2% to +1%',
-      confidence_level: 'High',
-    },
-    {
-      id: 'syn-price-2',
-      item_name: 'Masala Buttermilk',
-      current_price: 79,
-      suggested_action: 'Bundle with Biryani at Rs 59 add-on',
-      expected_cm_impact: '+3% to +5%',
-      expected_volume_impact: '+8% to +14%',
-      confidence_level: 'Medium',
-    },
-    {
-      id: 'syn-price-3',
-      item_name: 'Paneer Tikka',
-      current_price: 289,
-      suggested_action: 'Decrease to Rs 269 for lunch slots',
-      expected_cm_impact: '-2% to 0%',
-      expected_volume_impact: '+6% to +11%',
-      confidence_level: 'Medium',
-    },
-  ]
+  const insufficientData = shouldUseSynthetic(totalOrders)
 
   return {
-    usedSynthetic: syntheticNeeded,
-    opportunities: syntheticNeeded ? syntheticRows : deduped.slice(0, 18),
+    insufficientData,
+    opportunities: deduped.slice(0, 18),
   }
 }

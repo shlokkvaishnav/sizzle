@@ -123,12 +123,12 @@ def generate_combos(
     return _fetch_combos_from_db(db)
 
 
-def fetch_combos_from_db(db: Session) -> list[dict]:
+def fetch_combos_from_db(db: Session, restaurant_id: int = None) -> list[dict]:
     """
     Public read-only accessor: fetch pre-computed combos from the DB.
     Used by the API endpoint — never triggers training.
     """
-    return _fetch_combos_from_db(db)
+    return _fetch_combos_from_db(db, restaurant_id=restaurant_id)
 
 
 def run_combo_training_background(db_session_factory):
@@ -427,13 +427,12 @@ def _save_combos_to_db(db: Session, combos: list[dict]):
         logger.error("Error saving combos to DB: %s", e)
 
 
-def _fetch_combos_from_db(db: Session) -> list[dict]:
+def _fetch_combos_from_db(db: Session, restaurant_id: int = None) -> list[dict]:
     """Retrieve cached combos from the database, filtering out those with out-of-stock items."""
-    db_combos = (
-        db.query(ComboSuggestion)
-        .order_by(desc(ComboSuggestion.combo_score))
-        .all()
-    )
+    q = db.query(ComboSuggestion).order_by(desc(ComboSuggestion.combo_score))
+    if restaurant_id:
+        q = q.filter(ComboSuggestion.restaurant_id == restaurant_id)
+    db_combos = q.all()
 
     # Build stock lookup: items with current_stock == 0 are out of stock
     # current_stock == None means unlimited

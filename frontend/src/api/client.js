@@ -249,7 +249,7 @@ export const getVoiceOrders = () =>
   getWithCache('/voice/orders', { ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsOrders = (params = {}) =>
-  getWithCache('/ops/orders', { params, ttlMs: SHORT_CACHE_TTL_MS })
+  getWithCache('/ops/orders', { params: _params(params), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsOrder = (orderId) =>
   getWithCache(`/ops/orders/${orderId}`, { ttlMs: SHORT_CACHE_TTL_MS })
@@ -275,22 +275,22 @@ export const cancelOpsOrder = (orderId) =>
   })
 
 export const getOpsTables = () =>
-  getWithCache('/ops/tables', { ttlMs: SHORT_CACHE_TTL_MS })
+  getWithCache('/ops/tables', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsTablesFiltered = (params = {}) =>
-  getWithCache('/ops/tables', { params, ttlMs: SHORT_CACHE_TTL_MS })
+  getWithCache('/ops/tables', { params: _params(params), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsInventory = (days = 30) =>
-  getWithCache('/ops/inventory', { params: { days }, ttlMs: SHORT_CACHE_TTL_MS })
+  getWithCache('/ops/inventory', { params: _params({ days }), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsInventoryFiltered = (params = {}) =>
-  getWithCache('/ops/inventory', { params, ttlMs: SHORT_CACHE_TTL_MS })
+  getWithCache('/ops/inventory', { params: _params(params), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsReports = (days = 14) =>
-  getWithCache('/ops/reports', { params: { days }, ttlMs: SHORT_CACHE_TTL_MS })
+  getWithCache('/ops/reports', { params: _params({ days }), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsReportsFiltered = (params = {}) =>
-  getWithCache('/ops/reports', { params, ttlMs: SHORT_CACHE_TTL_MS })
+  getWithCache('/ops/reports', { params: _params(params), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsSettings = () =>
   getWithCache('/ops/settings', { params: _params(), ttlMs: LONG_CACHE_TTL_MS })
@@ -403,7 +403,14 @@ export const updateIngredient = (ingredientId, payload) =>
     return data
   })
 
+export const updateMenuItemPrice = (itemId, sellingPrice) =>
+  patch(`/ops/menu-items/${itemId}/price`, { selling_price: sellingPrice }).then((data) => {
+    invalidateCacheByPrefix('/revenue/menu-matrix?')
+    invalidateCacheByPrefix('/revenue/price-recommendations?')
+    return data
+  })
+
 export const exportReportsCsv = (params = {}) =>
-  api.get('/ops/reports/export', { params, responseType: 'blob' }).then((r) => r.data)
+  api.get('/ops/reports/export', { params: _params(params), responseType: 'blob' }).then((r) => r.data)
 
 export default api

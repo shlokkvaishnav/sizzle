@@ -5,13 +5,15 @@ Computes contribution margin (Selling Price − Food Cost),
 margin percentage, and profitability tiers for every item.
 """
 
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
 from models import MenuItem, VSale
 
 
-def calculate_margins(db: Session, restaurant_id: int = None) -> list[dict]:
+def calculate_margins(db: Session, restaurant_id: int = None, days: int = 30) -> list[dict]:
     """
     Calculate contribution margin for all active menu items.
 
@@ -41,14 +43,16 @@ def calculate_margins(db: Session, restaurant_id: int = None) -> list[dict]:
     items = q.all()
 
     # Revenue per item (aggregate in separate query to avoid GROUP BY issues)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     rev_q = (
         db.query(
             VSale.item_id,
             func.coalesce(func.sum(VSale.total_price), 0).label("total_revenue"),
         )
+        .filter(VSale.sold_at >= cutoff)
     )
     if restaurant_id:
-        rev_q = rev_q.filter(VSale.item_id.in_([i.id for i in items]))
+        rev_q = rev_q.filter(VSale.restaurant_id == restaurant_id)
     revenue_rows = rev_q.group_by(VSale.item_id).all()
     revenue_map = {r.item_id: float(r.total_revenue or 0) for r in revenue_rows}
 

@@ -104,6 +104,7 @@ class SettingsUpdateInput(BaseModel):
     billing_plan: dict | None = None
     security: dict | None = None
     voice_ai_config: dict | None = None
+    display_thresholds: dict | None = None
 
 
 DEFAULT_SETTINGS = {
@@ -145,6 +146,14 @@ DEFAULT_SETTINGS = {
     "profile_extras": {
         "operating_hours": "09:00-23:00",
         "gst_number": "",
+    },
+    "display_thresholds": {
+        "cm_green_min": 65,
+        "cm_yellow_min": 50,
+        "risk_margin_max": 40,
+        "risk_popularity_min": 0.5,
+        "confidence_green_min": 80,
+        "confidence_yellow_min": 60,
     },
 }
 
@@ -224,9 +233,12 @@ def _get_or_create_settings(db: Session, restaurant_id: int) -> RestaurantSettin
         security=DEFAULT_SETTINGS["security"],
         voice_ai_config=DEFAULT_SETTINGS["voice_ai_config"],
         profile_extras=DEFAULT_SETTINGS["profile_extras"],
+        display_thresholds=DEFAULT_SETTINGS["display_thresholds"],
     )
     db.add(settings)
     db.flush()
+    db.commit()
+    db.refresh(settings)
     return settings
 
 
@@ -241,6 +253,7 @@ def get_orders(
     search: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -261,6 +274,8 @@ def get_orders(
             end_dt = datetime.now(timezone.utc)
 
         filters = [Order.created_at >= start_dt, Order.created_at <= end_dt]
+        if restaurant_id:
+            filters.append(Order.restaurant_id == restaurant_id)
         if status:
             filters.append(Order.status == status)
         if order_type:
@@ -476,6 +491,7 @@ def get_tables(
     status: str | None = Query(None, pattern=r"^(empty|occupied|reserved|cleaning)$"),
     section: str | None = None,
     search: str | None = None,
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -483,6 +499,8 @@ def get_tables(
     """
     try:
         filters = []
+        if restaurant_id:
+            filters.append(RestaurantTable.restaurant_id == restaurant_id)
         if status:
             filters.append(RestaurantTable.status == status)
         if section:
@@ -499,6 +517,7 @@ def get_tables(
         )
         status_counts = (
             db.query(RestaurantTable.status, func.count(RestaurantTable.id))
+            .filter(*filters)
             .group_by(RestaurantTable.status)
             .all()
         )
@@ -519,7 +538,12 @@ def get_tables(
             }
             # If occupied and has an order, load the order details with items
             if t.current_order_id:
-                order = db.query(Order).filter(Order.id == t.current_order_id).first()
+                # current_order_id may be an integer PK or a string order_id
+                raw_oid = t.current_order_id
+                if isinstance(raw_oid, str) and not str(raw_oid).isdigit():
+                    order = db.query(Order).filter(Order.order_id == raw_oid).first()
+                else:
+                    order = db.query(Order).filter(Order.id == int(raw_oid)).first()
                 if order:
                     table_data["seated_at"] = order.created_at.isoformat() if order.created_at else None
                     table_data["updated_at"] = order.updated_at.isoformat() if order.updated_at else None
@@ -554,7 +578,7 @@ def get_tables(
                     }
             result_tables.append(table_data)
 
-        total_tables = db.query(func.count(RestaurantTable.id)).scalar() or 0
+        total_tables = db.query(func.count(RestaurantTable.id)).filter(*filters).scalar() or 0
         return {
             "summary": {
                 "total_tables": int(total_tables),
@@ -878,6 +902,36 @@ def get_menu_items_list(
         raise HTTPException(status_code=500, detail=f"Menu items fetch failed: {e}")
 
 
+class MenuItemPriceUpdate(BaseModel):
+    selling_price: float = Field(..., gt=0)
+
+
+@router.patch("/menu-items/{item_id}/price")
+def update_menu_item_price(
+    item_id: int,
+    body: MenuItemPriceUpdate,
+    db: Session = Depends(get_db),
+):
+    """Update the selling price of a menu item."""
+    try:
+        item = db.query(MenuItem).filter(MenuItem.id == item_id).first()
+        if not item:
+            raise HTTPException(status_code=404, detail="Menu item not found")
+        item.selling_price = body.selling_price
+        db.commit()
+        db.refresh(item)
+        return {
+            "item_id": item.id,
+            "name": item.name,
+            "selling_price": item.selling_price,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error updating menu item price")
+        raise HTTPException(status_code=500, detail=f"Price update failed: {e}")
+
+
 @router.post("/tables/{table_id}/add-item")
 def add_item_to_table_order(
     table_id: int,
@@ -1001,6 +1055,7 @@ def get_inventory(
     offset: int = Query(0, ge=0),
     search: str | None = None,
     low_stock_only: bool = False,
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -1011,6 +1066,8 @@ def get_inventory(
         cutoff = now_utc - timedelta(days=days)
 
         filters = []
+        if restaurant_id:
+            filters.append(Ingredient.restaurant_id == restaurant_id)
         if search:
             like = f"%{search.strip()}%"
             filters.append(Ingredient.name.ilike(like))
@@ -1046,7 +1103,8 @@ def get_inventory(
                 StockLog.reason,
                 func.coalesce(func.sum(func.abs(StockLog.change_qty)), 0.0).label("qty"),
             )
-            .filter(StockLog.created_at >= cutoff)
+            .join(Ingredient, Ingredient.id == StockLog.ingredient_id)
+            .filter(StockLog.created_at >= cutoff, *([Ingredient.restaurant_id == restaurant_id] if restaurant_id else []))
             .group_by(StockLog.reason)
             .all()
         )
@@ -1057,7 +1115,7 @@ def get_inventory(
                 func.coalesce(func.sum(StockLog.change_qty * Ingredient.cost_per_unit), 0.0)
             )
             .join(Ingredient, Ingredient.id == StockLog.ingredient_id)
-            .filter(StockLog.created_at >= cutoff)
+            .filter(StockLog.created_at >= cutoff, *([Ingredient.restaurant_id == restaurant_id] if restaurant_id else []))
             .scalar()
         ) or 0.0
 
@@ -1078,6 +1136,7 @@ def get_inventory(
                 {
                     "ingredient_id": i.id,
                     "name": i.name,
+                    "category": i.category or "Other",
                     "unit": i.unit,
                     "current_stock": i.current_stock,
                     "reorder_level": i.reorder_level,
@@ -1089,6 +1148,7 @@ def get_inventory(
                 {
                     "ingredient_id": i.id,
                     "name": i.name,
+                    "category": i.category or "Other",
                     "unit": i.unit,
                     "current_stock": i.current_stock,
                     "reorder_level": i.reorder_level,
@@ -1185,6 +1245,7 @@ def get_reports(
     top_n: int = Query(8, ge=3, le=20),
     start_date: str | None = None,
     end_date: str | None = None,
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -1204,6 +1265,10 @@ def get_reports(
             start_dt = now_utc - timedelta(days=days)
             end_dt = now_utc
 
+        rid_vsale = [VSale.restaurant_id == restaurant_id] if restaurant_id else []
+        rid_order = [Order.restaurant_id == restaurant_id] if restaurant_id else []
+        rid_menu = [MenuItem.restaurant_id == restaurant_id] if restaurant_id else []
+
         daily = (
             db.query(
                 func.date(VSale.sold_at).label("day"),
@@ -1211,7 +1276,7 @@ def get_reports(
                 func.coalesce(func.sum(VSale.quantity), 0).label("items"),
                 func.count(func.distinct(VSale.order_id)).label("orders"),
             )
-            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt)
+            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt, *rid_vsale)
             .group_by(func.date(VSale.sold_at))
             .order_by(func.date(VSale.sold_at).asc())
             .all()
@@ -1225,7 +1290,7 @@ def get_reports(
                 func.coalesce(func.sum(VSale.quantity), 0).label("qty"),
             )
             .join(VSale, VSale.item_id == MenuItem.id)
-            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt)
+            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt, *rid_vsale)
             .group_by(MenuItem.id, MenuItem.name)
             .order_by(desc("revenue"))
             .limit(top_n)
@@ -1240,7 +1305,7 @@ def get_reports(
             )
             .join(MenuItem, MenuItem.category_id == Category.id)
             .join(VSale, VSale.item_id == MenuItem.id)
-            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt)
+            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt, *rid_vsale)
             .group_by(Category.id, Category.name)
             .order_by(desc("revenue"))
             .limit(top_n)
@@ -1250,7 +1315,7 @@ def get_reports(
         # Hourly order heatmap (Mon-Sun x 0-23), using orders as operational source.
         orders_in_window = (
             db.query(Order.created_at)
-            .filter(Order.created_at >= start_dt, Order.created_at <= end_dt)
+            .filter(Order.created_at >= start_dt, Order.created_at <= end_dt, *rid_order)
             .all()
         )
         weekday_map = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -1275,6 +1340,7 @@ def get_reports(
             Order.created_at >= start_dt,
             Order.created_at <= end_dt,
             Order.source == "voice",
+            *rid_order,
         )
         voice_total = voice_base_query.count()
         voice_confirmed = voice_base_query.filter(Order.status == "confirmed").count()
@@ -1283,12 +1349,12 @@ def get_reports(
         voice_accuracy_pct = round((voice_confirmed / voice_total) * 100, 2) if voice_total else 0.0
 
         # Combo performance proxy: count orders that include all combo items.
-        combo_rows = db.query(MenuItem.id, MenuItem.name).all()
+        combo_rows = db.query(MenuItem.id, MenuItem.name).filter(*rid_menu).all()
         menu_name_by_id = {item_id: name for item_id, name in combo_rows}
         combos = (
             db.query(MenuItem.id, MenuItem.name, VSale.order_id)
             .join(VSale, VSale.item_id == MenuItem.id)
-            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt)
+            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt, *rid_vsale)
             .all()
         )
         order_items_map = {}
@@ -1300,7 +1366,7 @@ def get_reports(
         combo_suggestions = (
             db.query(MenuItem.id, MenuItem.name, Category.name)
             .join(Category, Category.id == MenuItem.category_id)
-            .filter(MenuItem.is_available == True)
+            .filter(MenuItem.is_available == True, *rid_menu)
             .limit(top_n)
             .all()
         )
@@ -1381,6 +1447,7 @@ def export_reports(
     kind: str = Query("daily", pattern=r"^(daily|top_items|top_categories)$"),
     days: int = Query(14, ge=7, le=90),
     top_n: int = Query(20, ge=3, le=50),
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -1388,6 +1455,7 @@ def export_reports(
     """
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        rid_vsale = [VSale.restaurant_id == restaurant_id] if restaurant_id else []
         output = StringIO()
         writer = csv.writer(output)
 
@@ -1399,7 +1467,7 @@ def export_reports(
                     func.coalesce(func.sum(VSale.quantity), 0).label("items"),
                     func.count(func.distinct(VSale.order_id)).label("orders"),
                 )
-                .filter(VSale.sold_at >= cutoff)
+                .filter(VSale.sold_at >= cutoff, *rid_vsale)
                 .group_by(func.date(VSale.sold_at))
                 .order_by(func.date(VSale.sold_at).asc())
                 .all()
@@ -1417,7 +1485,7 @@ def export_reports(
                     func.coalesce(func.sum(VSale.quantity), 0).label("qty"),
                 )
                 .join(VSale, VSale.item_id == MenuItem.id)
-                .filter(VSale.sold_at >= cutoff)
+                .filter(VSale.sold_at >= cutoff, *rid_vsale)
                 .group_by(MenuItem.id, MenuItem.name)
                 .order_by(desc("revenue"))
                 .limit(top_n)
@@ -1436,7 +1504,7 @@ def export_reports(
                 )
                 .join(MenuItem, MenuItem.category_id == Category.id)
                 .join(VSale, VSale.item_id == MenuItem.id)
-                .filter(VSale.sold_at >= cutoff)
+                .filter(VSale.sold_at >= cutoff, *rid_vsale)
                 .group_by(Category.id, Category.name)
                 .order_by(desc("revenue"))
                 .limit(top_n)
@@ -1459,7 +1527,7 @@ def export_reports(
 
 @router.get("/settings")
 def get_settings(
-    restaurant_id: int | None = None,
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -1491,6 +1559,7 @@ def get_settings(
             "billing_plan": settings.billing_plan or DEFAULT_SETTINGS["billing_plan"],
             "security": settings.security or DEFAULT_SETTINGS["security"],
             "voice_ai_config": settings.voice_ai_config or DEFAULT_SETTINGS["voice_ai_config"],
+            "display_thresholds": settings.display_thresholds or DEFAULT_SETTINGS["display_thresholds"],
         }
     except HTTPException:
         raise
@@ -1502,7 +1571,7 @@ def get_settings(
 @router.patch("/settings")
 def update_settings(
     body: SettingsUpdateInput,
-    restaurant_id: int | None = None,
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -1550,6 +1619,8 @@ def update_settings(
             settings.security = body.security
         if body.voice_ai_config is not None:
             settings.voice_ai_config = body.voice_ai_config
+        if body.display_thresholds is not None:
+            settings.display_thresholds = body.display_thresholds
 
         db.commit()
         return {"ok": True}

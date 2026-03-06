@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import LightRays from '../components/LightRays'
 import { motion } from 'motion/react'
@@ -33,6 +33,22 @@ export default function Login() {
     const [showPassword, setShowPassword] = useState(false)
     const [error, setError] = useState('')
     const [langOpen, setLangOpen] = useState(false)
+    const [enableVisualFx, setEnableVisualFx] = useState(false)
+
+    useEffect(() => {
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        const lowPowerDevice = window.innerWidth < 1024 || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4)
+        if (reducedMotion || lowPowerDevice) return
+
+        const start = () => setEnableVisualFx(true)
+        if ('requestIdleCallback' in window) {
+            const idleId = window.requestIdleCallback(start, { timeout: 500 })
+            return () => window.cancelIdleCallback(idleId)
+        }
+
+        const timer = window.setTimeout(start, 250)
+        return () => window.clearTimeout(timer)
+    }, [])
 
     const fillDemo = (account) => {
         setEmail(account.email)
@@ -78,34 +94,21 @@ export default function Login() {
             <div style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
                 <div style={{ position: 'absolute', inset: 0 }}>
                     <LightRays
+                        enabled={enableVisualFx}
                         raysOrigin="left"
                         raysColor="#ffffff"
-                        raysSpeed={1}
+                        raysSpeed={0.8}
                         lightSpread={0.5}
-                        rayLength={3}
-                        followMouse={true}
-                        mouseInfluence={0.1}
+                        rayLength={2.4}
+                        followMouse={false}
+                        mouseInfluence={0}
                         noiseAmount={0}
                         distortion={0}
                         pulsating={false}
-                        fadeDistance={1}
+                        fadeDistance={0.9}
                         saturation={1}
-                    />
-                </div>
-                <div style={{ position: 'absolute', inset: 0, opacity: 0.8 }}>
-                    <LightRays
-                        raysOrigin="right"
-                        raysColor="#ffffff"
-                        raysSpeed={1}
-                        lightSpread={0.5}
-                        rayLength={3}
-                        followMouse={true}
-                        mouseInfluence={0.1}
-                        noiseAmount={0}
-                        distortion={0}
-                        pulsating={false}
-                        fadeDistance={1}
-                        saturation={1}
+                        maxDpr={1}
+                        targetFps={30}
                     />
                 </div>
             </div>

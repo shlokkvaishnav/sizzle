@@ -148,6 +148,11 @@ export default function Dashboard() {
     [dailySeries],
   )
 
+  const todayRow = dailySeries.find((row) => row.is_today)
+  const todayRevenue = todayRow?.revenue || 0
+  const todayOrders = todayRow?.orders || 0
+  const todayAov = todayOrders > 0 ? todayRevenue / todayOrders : 0
+
   const revenueTrend = periodTrend(revenueSeries.map((point) => point.value))
   const ordersTrend = periodTrend(orderSeries.map((point) => point.value))
   const aovTrend = periodTrend(aovSeries.map((point) => point.value))
@@ -196,28 +201,28 @@ export default function Dashboard() {
   const driftItems = (trends?.quadrant_drift || []).slice(0, 5)
 
   const alertChips = [
-    { label: `${riskItems.length} underperformers`, tone: 'danger' },
-    { label: `${hiddenStars.length} hidden gems`, tone: 'success' },
-    { label: `${lowStock.length} low stock alerts`, tone: 'warning' },
-    { label: `${driftItems.length} quadrant drifts`, tone: 'info' },
+    { label: `${riskItems.length} underperformers`, tone: 'danger', target: 'underperformers' },
+    { label: `${hiddenStars.length} hidden gems`, tone: 'success', target: 'hidden-gems' },
+    { label: `${lowStock.length} low stock alerts`, tone: 'warning', target: 'low-stock' },
+    { label: `${driftItems.length} quadrant drifts`, tone: 'info', target: 'quadrant-drift' },
   ]
 
   const kpiChips = [
     {
-      title: 'Revenue (30D)',
-      value: formatRupeesShort(metrics.total_revenue || 0),
+      title: "Today's Revenue",
+      value: formatRupeesShort(todayRevenue),
       trend: revenueTrend,
       sparkline: revenueSeries,
     },
     {
-      title: 'Orders (30D)',
-      value: (metrics.total_orders || 0).toLocaleString('en-IN'),
+      title: "Today's Orders",
+      value: (todayOrders).toLocaleString('en-IN'),
       trend: ordersTrend,
       sparkline: orderSeries,
     },
     {
       title: 'Avg Order Value',
-      value: formatRupees(metrics.avg_order_value || 0),
+      value: formatRupees(todayAov),
       trend: aovTrend,
       sparkline: aovSeries,
     },
@@ -276,7 +281,12 @@ export default function Dashboard() {
 
       <section className="dash-alert-strip" aria-label="AI insight alerts">
         {alertChips.map((chip) => (
-          <div key={chip.label} className={`dash-alert-chip dash-alert-chip--${chip.tone}`}>
+          <div
+            key={chip.label}
+            className={`dash-alert-chip dash-alert-chip--${chip.tone}`}
+            style={{ cursor: 'pointer' }}
+            onClick={() => document.getElementById(chip.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          >
             {chip.label}
           </div>
         ))}
@@ -343,8 +353,8 @@ export default function Dashboard() {
             </div>
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', maxWidth: 420 }}>
-            {priceInsight.usedSynthetic
-              ? 'Using display-only synthetic recommendations because order history is limited.'
+            {priceInsight.insufficientData && priceInsight.opportunities.length === 0
+              ? 'Not enough order history to generate price recommendations yet.'
               : 'Recommendations are based on BCG quadrant behavior, margin signals, and bundle opportunities.'}
           </div>
         </div>
@@ -373,7 +383,7 @@ export default function Dashboard() {
               <BarChart data={topItemsByRevenue} layout="vertical" margin={{ top: 10, right: 12, left: 12, bottom: 10 }}>
                 <XAxis type="number" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} tickFormatter={(v) => formatRupeesShort(v)} />
                 <YAxis dataKey="name" type="category" width={120} tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                <Tooltip contentStyle={CHART_TOOLTIP} formatter={(value) => formatRupees(value)} />
+                <Tooltip contentStyle={CHART_TOOLTIP} formatter={(value) => formatRupees(value)} cursor={false} />
                 <Bar dataKey="revenue_last_30d" radius={[0, 6, 6, 0]}>
                   {topItemsByRevenue.map((_, index) => (
                     <Cell key={index} fill={barColorByRank(index, topItemsByRevenue.length)} />
@@ -396,8 +406,8 @@ export default function Dashboard() {
                 <BarChart data={hourlyOrders} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
                   <XAxis dataKey="label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                  <Tooltip contentStyle={CHART_TOOLTIP} />
-                  <Bar dataKey="orders" radius={[4, 4, 0, 0]}>
+                  <Tooltip contentStyle={CHART_TOOLTIP} cursor={false} formatter={(value) => [`${value} orders`, 'Orders']} labelFormatter={() => ''} />
+                  <Bar dataKey="orders" radius={[6, 6, 0, 0]}>
                     {hourlyOrders.map((_, index) => (
                       <Cell key={index} fill={barColorByRank(index, hourlyOrders.length)} />
                     ))}
@@ -408,7 +418,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="card">
+        <div className="card" id="low-stock">
           <div className="card-header">Low Stock Alerts</div>
           <div className="card-body">
             {lowStock.length === 0 ? (
@@ -421,7 +431,7 @@ export default function Dashboard() {
                       <div className="dash-low-stock-name">{item.name}</div>
                       <div className="dash-low-stock-meta">{item.current_stock} {item.unit} left • Reorder at {item.reorder_level}</div>
                     </div>
-                    <button className="btn btn-ghost" style={{ fontSize: 11 }}>Reorder</button>
+                    <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => navigate('/dashboard/inventory')}>Reorder</button>
                   </div>
                 ))}
               </div>
@@ -431,7 +441,7 @@ export default function Dashboard() {
       </section>
 
       <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
-        <div className="card">
+        <div className="card" id="hidden-gems">
           <div className="card-header">Hidden Gems</div>
           <div className="card-body" style={{ padding: 0 }}>
             {hiddenStars.length === 0 ? (
@@ -445,7 +455,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="card">
+        <div className="card" id="underperformers">
           <div className="card-header">Underperformers</div>
           <div className="card-body" style={{ padding: 0 }}>
             {riskItems.length === 0 ? (
@@ -460,7 +470,7 @@ export default function Dashboard() {
         </div>
       </section>
 
-      <section className="card" style={{ marginBottom: 'var(--space-6)' }}>
+      <section className="card" id="quadrant-drift" style={{ marginBottom: 'var(--space-6)' }}>
         <div className="card-header">Quadrant Drift Alerts</div>
         <div className="card-body">
           {driftItems.length === 0 ? (
@@ -474,7 +484,7 @@ export default function Dashboard() {
                     <span className="dash-drift-badge">{item.drift_direction}</span>
                   </div>
                   <p>{item.drift_warning}</p>
-                  <button className="btn btn-ghost" style={{ fontSize: 11 }}>Promote This Item</button>
+                  <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => navigate(`/dashboard/menu-analysis?item=${item.item_id}`)}>Promote This Item</button>
                 </div>
               ))}
             </div>

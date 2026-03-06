@@ -63,7 +63,6 @@ export default function DashboardLayout() {
             transition={{ duration: 0.2 }}
           >
             <div className="sidebar-brand-kicker">Sizzle</div>
-            <h2>{restaurant?.restaurant_name || restaurant?.name || 'Restaurant'}</h2>
           </motion.div>
         </div>
 
@@ -133,6 +132,9 @@ export default function DashboardLayout() {
 
       {/* Main Content */}
       <main className={`main-content ${open ? '' : 'main-content--expanded'}`}>
+        <div className="main-content-restaurant-bar">
+          {restaurant?.restaurant_name || restaurant?.name || 'Restaurant'}
+        </div>
         <Outlet />
       </main>
 
