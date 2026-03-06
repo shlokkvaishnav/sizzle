@@ -224,7 +224,8 @@ export default function VoiceOrder() {
   const confColor = (c) => c >= 0.9 ? 'var(--success)' : c >= 0.85 ? 'var(--warning)' : 'var(--danger)'
 
   // Cart items from session (accumulated across all turns)
-  const cartItems = result?.session_items || []
+  // Fallback to result.items if session_items not available (e.g. session_id missed)
+  const cartItems = result?.session_items || result?.items || []
   const hasCart = cartItems.length > 0
 
   // Effective order for display (use session_order which covers all turns)

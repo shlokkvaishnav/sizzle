@@ -9,7 +9,7 @@ import logging
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
@@ -135,7 +135,7 @@ async def transcribe_audio(
 @router.post("/process-audio")
 async def process_audio(
     audio: UploadFile = File(...),
-    session_id: str = None,
+    session_id: str = Form(None),
     pipeline=Depends(get_voice_pipeline),
 ):
     """
