@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   getDashboardMetrics,
   getHiddenStars,
+  getMenuMatrix,
+  getPriceRecommendations,
   getRisks,
   getTrends,
   getOpsReports,
@@ -21,6 +24,7 @@ import {
 } from 'recharts'
 import { motion } from 'motion/react'
 import { formatRupees, formatRupeesShort, formatPct } from '../utils/format'
+import { buildPriceOpportunities, buildUpsellCandidates } from '../utils/revenueInsights'
 
 const CHART_TOOLTIP = {
   backgroundColor: 'var(--bg-surface)',
@@ -69,9 +73,12 @@ function Sparkline({ data, color }) {
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate()
   const [metrics, setMetrics] = useState(null)
   const [reports, setReports] = useState(null)
   const [trends, setTrends] = useState(null)
+  const [menuMatrixItems, setMenuMatrixItems] = useState([])
+  const [priceRecommendations, setPriceRecommendations] = useState([])
   const [hiddenStars, setHiddenStars] = useState([])
   const [riskItems, setRiskItems] = useState([])
   const [lowStock, setLowStock] = useState([])
@@ -108,12 +115,16 @@ export default function Dashboard() {
       loadSafe('Risks', getRisks(), { items: [] }),
       loadSafe('Trends', getTrends(), null),
       loadSafe('Inventory', getOpsInventory(30), { low_stock: [] }),
-    ]).then(([hs, risks, trendData, inventory]) => {
+      loadSafe('Menu Matrix', getMenuMatrix(), { items: [] }),
+      loadSafe('Price Recommendations', getPriceRecommendations(), { recommendations: [] }),
+    ]).then(([hs, risks, trendData, inventory, menuMatrix, priceData]) => {
       if (!active) return
       setHiddenStars((hs.items || []).slice(0, 6))
       setRiskItems((risks.items || []).slice(0, 6))
       setTrends(trendData)
       setLowStock((inventory.low_stock || []).slice(0, 6))
+      setMenuMatrixItems((menuMatrix?.items || []))
+      setPriceRecommendations((priceData?.recommendations || []))
       setSecondaryErrors(errors)
       setSecondaryLoaded(true)
     })
@@ -140,6 +151,23 @@ export default function Dashboard() {
   const revenueTrend = periodTrend(revenueSeries.map((point) => point.value))
   const ordersTrend = periodTrend(orderSeries.map((point) => point.value))
   const aovTrend = periodTrend(aovSeries.map((point) => point.value))
+  const upsellItems = useMemo(() => (
+    buildUpsellCandidates({
+      items: menuMatrixItems,
+      trends,
+      currentOrderItems: [],
+      limit: 6,
+    })
+  ), [menuMatrixItems, trends])
+
+  const priceInsight = useMemo(() => (
+    buildPriceOpportunities({
+      items: menuMatrixItems,
+      combos: [],
+      apiRecommendations: priceRecommendations,
+      totalOrders: metrics?.total_orders || 0,
+    })
+  ), [menuMatrixItems, priceRecommendations, metrics])
 
   if (loading) {
     return (
@@ -252,6 +280,74 @@ export default function Dashboard() {
             {chip.label}
           </div>
         ))}
+      </section>
+
+      <section className="card" style={{ marginBottom: 'var(--space-6)' }}>
+        <div className="card-header">AI Upsell Opportunities</div>
+        <div className="card-body" style={{ overflowX: 'auto' }}>
+          {secondaryLoaded ? (
+            upsellItems.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+                No strong upsell candidates yet. Add more order history to improve candidate ranking.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 'var(--space-3)', minWidth: 'max-content' }}>
+                {upsellItems.slice(0, 6).map((item) => (
+                  <div
+                    key={item.item_id}
+                    className="card"
+                    style={{ minWidth: 260, borderColor: 'var(--border-subtle)' }}
+                  >
+                    <div className="card-body">
+                      <div style={{ fontWeight: 700, marginBottom: 6 }}>{item.name}</div>
+                      <div style={{ color: 'var(--success)', fontWeight: 700, marginBottom: 8 }}>
+                        CM {formatPct(item.cm_percent)}
+                      </div>
+                      <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                        {item.reason}
+                      </p>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ fontSize: 12, padding: 0 }}
+                        onClick={() => navigate(`/dashboard/menu-analysis?item=${item.item_id}`)}
+                      >
+                        View Item
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 'var(--space-3)' }}>
+              {Array.from({ length: 3 }).map((_, idx) => (
+                <div key={idx} className="skeleton" style={{ height: 130 }} />
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="card" style={{ marginBottom: 'var(--space-6)' }}>
+        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Price Opportunities</span>
+          <Link to="/dashboard/menu-analysis?tab=price-opportunities" className="btn btn-ghost" style={{ fontSize: 12 }}>
+            Review Suggestions
+          </Link>
+        </div>
+        <div className="card-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Identified Opportunities</div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--accent)' }}>
+              {priceInsight.opportunities.length}
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', maxWidth: 420 }}>
+            {priceInsight.usedSynthetic
+              ? 'Using display-only synthetic recommendations because order history is limited.'
+              : 'Recommendations are based on BCG quadrant behavior, margin signals, and bundle opportunities.'}
+          </div>
+        </div>
       </section>
 
       <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>

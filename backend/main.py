@@ -34,6 +34,7 @@ _ALLOWED_ORIGINS = os.getenv(
     "CORS_ORIGINS",
     "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173",
 ).split(",")
+_ALLOWED_ORIGINS = [origin.strip() for origin in _ALLOWED_ORIGINS if origin.strip()]
 
 
 @asynccontextmanager
@@ -152,9 +153,13 @@ app.middleware("http")(rate_limit_middleware)
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    include_detail = os.getenv("EXPOSE_ERROR_DETAILS", "false").lower() in ("1", "true", "yes")
+    content = {"error": "Internal server error"}
+    if include_detail:
+        content["detail"] = str(exc)
     return JSONResponse(
         status_code=500,
-        content={"error": "Internal server error", "detail": str(exc)},
+        content=content,
     )
 
 
