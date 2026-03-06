@@ -260,6 +260,10 @@ export default function WebCall() {
     sendEnd()
   }, [sendEnd])
 
+  const handleStreamDiscard = useCallback(() => {
+    sendInterrupt()
+  }, [sendInterrupt])
+
   const handleAutoListenSilence = useCallback(() => {
     if (!callActiveRef.current || micPausedRef.current) return
     if (silenceRepromptCountRef.current >= SILENCE_REPROMPT_LIMIT) return
@@ -492,6 +496,7 @@ export default function WebCall() {
                 onAudioChunk={sendAudioChunk}
                 onStreamStart={handleStreamStart}
                 onStreamEnd={handleStreamEnd}
+                onStreamDiscard={handleStreamDiscard}
               />
 
               <div style={{ display: 'flex', gap: 8, width: '100%' }}>

@@ -232,6 +232,10 @@ export default function VoiceOrder() {
     sendEnd()
   }, [sendEnd])
 
+  const handleStreamDiscard = useCallback(() => {
+    sendInterrupt()
+  }, [sendInterrupt])
+
   // ── Remove item via UI button ──
   const handleRemoveItem = async (itemName) => {
     setLoading(true)
@@ -525,6 +529,7 @@ export default function VoiceOrder() {
                 onAudioChunk={sendAudioChunk}
                 onStreamStart={handleStreamStart}
                 onStreamEnd={handleStreamEnd}
+                onStreamDiscard={handleStreamDiscard}
               />
               {/* Live transcript indicator while processing */}
               <AnimatePresence>
