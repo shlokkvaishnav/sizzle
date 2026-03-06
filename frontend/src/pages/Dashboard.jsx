@@ -232,7 +232,7 @@ export default function Dashboard() {
           <MetricCard label="Avg Contribution Margin" value={formatPct(metrics.avg_cm_percent)} color="var(--success)" icon="" />
         </motion.div>
         <motion.div variants={staggerItem}>
-          <MetricCard label="Star Items" value={metrics.star_count || hiddenStars.length || 0} color="var(--success)" icon="" />
+          <MetricCard label="Star Items" value={metrics.stars_count || hiddenStars.length || 0} color="var(--success)" icon="" />
         </motion.div>
         <motion.div variants={staggerItem}>
           <MetricCard label="Hidden Gems" value={hiddenStars.length || 0} color="var(--data-5)" icon="" />
