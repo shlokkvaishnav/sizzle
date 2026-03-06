@@ -7,18 +7,27 @@ export function AuthProvider({ children }) {
         return !!localStorage.getItem('sizzle_auth')
     })
 
-    const login = () => {
+    const [restaurant, setRestaurant] = useState(() => {
+        const saved = localStorage.getItem('sizzle_restaurant')
+        return saved ? JSON.parse(saved) : null
+    })
+
+    const login = (restaurantData) => {
         localStorage.setItem('sizzle_auth', 'true')
+        localStorage.setItem('sizzle_restaurant', JSON.stringify(restaurantData))
+        setRestaurant(restaurantData)
         setIsLoggedIn(true)
     }
 
     const logout = () => {
         localStorage.removeItem('sizzle_auth')
+        localStorage.removeItem('sizzle_restaurant')
+        setRestaurant(null)
         setIsLoggedIn(false)
     }
 
     return (
-        <AuthContext.Provider value={{ isLoggedIn, login, logout }}>
+        <AuthContext.Provider value={{ isLoggedIn, restaurant, login, logout }}>
             {children}
         </AuthContext.Provider>
     )

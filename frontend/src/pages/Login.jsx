@@ -4,7 +4,13 @@ import LightRays from '../components/LightRays'
 import { motion } from 'motion/react'
 import { useAuth } from '../context/AuthContext'
 import { useTranslation } from '../context/LanguageContext'
+import { loginApi } from '../api/client'
 import './Login.css'
+
+const DEMO_ACCOUNTS = [
+    { label: 'Restaurant 1', name: 'Spice Craft', cuisine: 'Indian Multi-Cuisine', email: 'admin@spicecraft.in', password: 'spicecraft123', emoji: '🍛' },
+    { label: 'Restaurant 2', name: 'Dragon Wok', cuisine: 'Chinese & Pan-Asian', email: 'admin@dragonwok.in', password: 'dragon123', emoji: '🐉' },
+]
 
 const languages = [
     { code: 'en', label: 'English' },
@@ -25,6 +31,12 @@ export default function Login() {
     const [error, setError] = useState('')
     const [langOpen, setLangOpen] = useState(false)
 
+    const fillDemo = (account) => {
+        setEmail(account.email)
+        setPassword(account.password)
+        setError('')
+    }
+
     const handleLogin = async (e) => {
         e.preventDefault()
         if (!email || !password) {
@@ -34,11 +46,15 @@ export default function Login() {
         setError('')
         setLoading(true)
 
-        setTimeout(() => {
-            setLoading(false)
-            login()
+        try {
+            const data = await loginApi(email, password)
+            login(data)  // stores { restaurant_id, restaurant_name, slug, ... }
             navigate('/dashboard')
-        }, 1200)
+        } catch (err) {
+            setError(err?.detail || 'Invalid email or password')
+        } finally {
+            setLoading(false)
+        }
     }
 
     return (
@@ -232,6 +248,27 @@ export default function Login() {
                                 )}
                             </motion.button>
                         </form>
+
+                        {/* Demo Credentials for Hackathon */}
+                        <div className="demo-credentials">
+                            <p className="demo-credentials-title">Demo Accounts</p>
+                            <div className="demo-cards-row">
+                                {DEMO_ACCOUNTS.map((acc) => (
+                                    <button
+                                        key={acc.email}
+                                        className="demo-card"
+                                        onClick={() => fillDemo(acc)}
+                                        type="button"
+                                    >
+                                        <span className="demo-card-emoji">{acc.emoji}</span>
+                                        <span className="demo-card-name">{acc.name}</span>
+                                        <span className="demo-card-cuisine">{acc.cuisine}</span>
+                                        <span className="demo-card-creds">{acc.email}</span>
+                                        <span className="demo-card-creds">{acc.password}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
                     </motion.div>
 
                     {/* Footer */}
@@ -274,7 +311,7 @@ export default function Login() {
                         </div>
                     </motion.div>
                 </div>
-            </motion.div>
-        </div>
+            </motion.div >
+        </div >
     )
 }

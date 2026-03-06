@@ -397,3 +397,77 @@
         margin-bottom: 40px;
     }
 }
+
+/* ── Demo Credentials Cards ── */
+.demo-credentials {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.demo-credentials-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.5);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 12px;
+    text-align: center;
+}
+
+.demo-cards-row {
+    display: flex;
+    gap: 10px;
+}
+
+.demo-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 14px 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    color: #fff;
+    font-family: inherit;
+}
+
+.demo-card:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 165, 0, 0.4);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(255, 165, 0, 0.1);
+}
+
+.demo-card-emoji {
+    font-size: 24px;
+    margin-bottom: 2px;
+}
+
+.demo-card-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+}
+
+.demo-card-cuisine {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.4);
+    margin-bottom: 4px;
+}
+
+.demo-card-creds {
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
+    color: rgba(255, 165, 0, 0.7);
+    background: rgba(255, 165, 0, 0.06);
+    padding: 2px 8px;
+    border-radius: 4px;
+    width: 100%;
+    text-align: center;
+    word-break: break-all;
+}

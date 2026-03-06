@@ -61,40 +61,43 @@ def _set_cached(key: str, data):
         _cache[key] = {"data": data, "ts": time.time()}
 
 
-def _get_margins_popularity(db: Session) -> tuple[list[dict], list[dict]]:
+def _get_margins_popularity(db: Session, restaurant_id: int = None) -> tuple[list[dict], list[dict]]:
     """Return margins and popularity, reusing cached values if available."""
-    margins = _get_cached("_margins")
-    popularity = _get_cached("_popularity")
+    suffix = f"_{restaurant_id}" if restaurant_id else ""
+    margins = _get_cached(f"_margins{suffix}")
+    popularity = _get_cached(f"_popularity{suffix}")
     if margins is None:
-        margins = calculate_margins(db)
-        _set_cached("_margins", margins)
+        margins = calculate_margins(db, restaurant_id=restaurant_id)
+        _set_cached(f"_margins{suffix}", margins)
     if popularity is None:
-        popularity = calculate_popularity(db)
-        _set_cached("_popularity", popularity)
+        popularity = calculate_popularity(db, restaurant_id=restaurant_id)
+        _set_cached(f"_popularity{suffix}", popularity)
     return margins, popularity
 
 
 @router.get("/dashboard")
-def get_dashboard(db: Session = Depends(get_db)):
+def get_dashboard(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """
-    GET /api/revenue/dashboard
+    GET /api/revenue/dashboard?restaurant_id=1
     Returns: total_revenue, avg_cm_percent, items_at_risk_count, uplift_potential,
              health_score with breakdown, operational metrics
     """
     try:
-        cached = _get_cached("dashboard")
+        cache_key = f"dashboard_{restaurant_id}" if restaurant_id else "dashboard"
+        cached = _get_cached(cache_key)
         if cached:
             return cached
 
         # Only compute what the dashboard needs (skip combos & trends for speed)
-        margins = calculate_margins(db)
-        popularity = calculate_popularity(db)
+        margins = calculate_margins(db, restaurant_id=restaurant_id)
+        popularity = calculate_popularity(db, restaurant_id=restaurant_id)
         matrix = classify_menu_matrix(margins, popularity)
         hidden_stars_list = detect_hidden_stars(margins, popularity)
 
         # Cache these for other endpoints to reuse within TTL
-        _set_cached("_margins", margins)
-        _set_cached("_popularity", popularity)
+        suffix = f"_{restaurant_id}" if restaurant_id else ""
+        _set_cached(f"_margins{suffix}", margins)
+        _set_cached(f"_popularity{suffix}", popularity)
 
         total_items = len(margins)
         avg_margin = (
@@ -103,10 +106,10 @@ def get_dashboard(db: Session = Depends(get_db)):
             else 0
         )
 
-        total_revenue = (
-            db.query(func.sum(SaleTransaction.total_price))
-            .scalar() or 0.0
-        )
+        rev_q = db.query(func.sum(SaleTransaction.total_price))
+        if restaurant_id:
+            rev_q = rev_q.filter(SaleTransaction.restaurant_id == restaurant_id)
+        total_revenue = rev_q.scalar() or 0.0
 
         items_at_risk = sum(
             1 for m in matrix
@@ -145,7 +148,7 @@ def get_dashboard(db: Session = Depends(get_db)):
             "orders_by_type": ops.get("orders_by_type", []),
         }
 
-        _set_cached("dashboard", result)
+        _set_cached(cache_key, result)
         return result
     except Exception as e:
         logger.exception("Error computing dashboard")
@@ -153,18 +156,19 @@ def get_dashboard(db: Session = Depends(get_db)):
 
 
 @router.get("/menu-matrix")
-def get_menu_matrix(db: Session = Depends(get_db)):
+def get_menu_matrix(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
     """
-    GET /api/revenue/menu-matrix
+    GET /api/revenue/menu-matrix?restaurant_id=1
     Returns: all items with quadrant, cm_percent, popularity_score
     Used by frontend scatter chart.
     """
     try:
-        cached = _get_cached("menu_matrix")
+        cache_key = f"menu_matrix_{restaurant_id}" if restaurant_id else "menu_matrix"
+        cached = _get_cached(cache_key)
         if cached:
             return cached
 
-        margins, popularity = _get_margins_popularity(db)
+        margins, popularity = _get_margins_popularity(db, restaurant_id=restaurant_id)
         matrix = classify_menu_matrix(margins, popularity)
         summary = get_quadrant_summary(matrix)
         result = {"items": matrix, "summary": summary}

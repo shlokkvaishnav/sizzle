@@ -4,6 +4,7 @@ models.py — SQLAlchemy ORM Models (Supabase PostgreSQL)
 All database tables for menu items, categories, orders,
 order items, KOTs, sales transactions, combos, staff,
 restaurant tables, shifts, and ingredients.
+Multi-tenant: every major table has restaurant_id FK.
 """
 
 from datetime import datetime, timezone
@@ -29,6 +30,33 @@ def _utcnow():
     return datetime.now(timezone.utc)
 
 
+# ── Restaurant (Master Table) ──────────────────
+
+class Restaurant(Base):
+    """Master restaurant record — each restaurant has its own menu, staff, orders."""
+
+    __tablename__ = "restaurants"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False)
+    slug = Column(String(100), unique=True, nullable=False)  # URL-friendly identifier
+    email = Column(String(200), unique=True, nullable=False)
+    password_hash = Column(String(256), nullable=False)  # bcrypt / sha256
+    phone = Column(String(20))
+    address = Column(Text)
+    cuisine_type = Column(String(100))  # "Indian", "Chinese", "Multi-cuisine"
+    logo_url = Column(String(500))
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+    # Relationships
+    categories = relationship("Category", back_populates="restaurant")
+    menu_items = relationship("MenuItem", back_populates="restaurant")
+    staff_members = relationship("Staff", back_populates="restaurant")
+    orders = relationship("Order", back_populates="restaurant")
+    shifts = relationship("Shift", back_populates="restaurant")
+
+
 # ── Staff ────────────────────────────────────────
 
 class Staff(Base):
@@ -37,6 +65,7 @@ class Staff(Base):
     __tablename__ = "staff"
 
     id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
     name = Column(String(150), nullable=False)
     role = Column(String(30), nullable=False, default="waiter")  # waiter | cashier | manager | chef
     pin_hash = Column(String(128), nullable=False)  # hashed 4-6 digit PIN for POS login
@@ -44,6 +73,7 @@ class Staff(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=_utcnow)
 
+    restaurant = relationship("Restaurant", back_populates="staff_members")
     orders = relationship("Order", back_populates="staff", foreign_keys="Order.staff_id")
     shifts_opened = relationship("Shift", back_populates="opened_by_staff", foreign_keys="Shift.opened_by")
     shifts_closed = relationship("Shift", back_populates="closed_by_staff", foreign_keys="Shift.closed_by")
@@ -83,6 +113,7 @@ class Shift(Base):
     __tablename__ = "shifts"
 
     id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
     name = Column(String(50))  # "Lunch", "Dinner", or auto-generated
     started_at = Column(DateTime, nullable=False, default=_utcnow)
     ended_at = Column(DateTime, nullable=True)
@@ -92,6 +123,7 @@ class Shift(Base):
     closing_cash = Column(Float, nullable=True)
     status = Column(String(10), default="open")  # open | closed
 
+    restaurant = relationship("Restaurant", back_populates="shifts")
     opened_by_staff = relationship("Staff", back_populates="shifts_opened", foreign_keys=[opened_by])
     closed_by_staff = relationship("Staff", back_populates="shifts_closed", foreign_keys=[closed_by])
     orders = relationship("Order", back_populates="shift")
@@ -108,7 +140,8 @@ class Category(Base):
     __tablename__ = "categories"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), unique=True, nullable=False)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
+    name = Column(String(100), nullable=False)
     name_hi = Column(String(100))  # Hindi name
     name_mr = Column(String(100))  # Marathi name
     name_kn = Column(String(100))  # Kannada name
@@ -117,6 +150,7 @@ class Category(Base):
     display_order = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
 
+    restaurant = relationship("Restaurant", back_populates="categories")
     items = relationship("MenuItem", back_populates="category")
 
 
@@ -126,6 +160,7 @@ class MenuItem(Base):
     __tablename__ = "menu_items"
 
     id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
     name = Column(String(200), nullable=False)
     name_hi = Column(String(200))  # Hindi name
     name_mr = Column(String(200))  # Marathi name
@@ -145,6 +180,7 @@ class MenuItem(Base):
     tags = Column(JSON, default=list)  # ["spicy", "chef-special", etc.]
     created_at = Column(DateTime, default=_utcnow)
 
+    restaurant = relationship("Restaurant", back_populates="menu_items")
     category = relationship("Category", back_populates="items")
     sales = relationship("SaleTransaction", back_populates="item")
     ingredients = relationship("MenuItemIngredient", back_populates="menu_item")
@@ -166,6 +202,7 @@ class SaleTransaction(Base):
     __tablename__ = "sale_transactions"
 
     id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
     item_id = Column(Integer, ForeignKey("menu_items.id"), nullable=False)
     order_id = Column(String(50), nullable=False)
     quantity = Column(Integer, default=1)
@@ -185,6 +222,7 @@ class Order(Base):
     __tablename__ = "orders"
 
     id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
     order_id = Column(String(50), unique=True, nullable=False)
     order_number = Column(String(20))  # Human-readable order number
     total_amount = Column(Float, default=0.0)
@@ -198,6 +236,7 @@ class Order(Base):
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
+    restaurant = relationship("Restaurant", back_populates="orders")
     order_items = relationship("OrderItem", back_populates="order")
     kots = relationship("KOT", back_populates="order")
     staff = relationship("Staff", back_populates="orders", foreign_keys=[staff_id])
@@ -243,6 +282,7 @@ class ComboSuggestion(Base):
     __tablename__ = "combo_suggestions"
 
     id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
     name = Column(String(200), nullable=False)
     item_ids = Column(JSON, nullable=False)  # [1, 5, 12]
     item_names = Column(JSON, nullable=False)  # ["Paneer Tikka", "Naan", ...]
@@ -349,3 +389,4 @@ class StockLog(Base):
     __table_args__ = (
         CheckConstraint("reason IN ('purchase','usage','waste','adjustment')", name="ck_stocklog_reason"),
     )
+
