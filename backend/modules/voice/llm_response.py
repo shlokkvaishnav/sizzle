@@ -204,6 +204,13 @@ class LLMResponseGenerator:
             if err == "audio_too_short":
                 return self._t_audio_short(lang)
 
+        if intent == "DONE":
+            session_items = pipeline_result.get("session_items", [])
+            if session_items:
+                return self._t_done(lang)
+            else:
+                return self._t_done_empty(lang)
+
         # Intent-based templates
         if intent == "ORDER":
             if len(items) == 0:
@@ -213,8 +220,17 @@ class LLMResponseGenerator:
             return self._t_order(lang, items)
 
         if intent == "CANCEL":
-            item_name = items[0]["item_name"] if items else "the item"
-            return self._t_cancel(lang, item_name)
+            if not items:
+                # No specific items → check if cart was cleared
+                session_items = pipeline_result.get("session_items", [])
+                if not session_items:
+                    return self._t_cancel_all(lang)
+                else:
+                    return self._t_cancel_clarify(lang)
+            if len(items) == 1:
+                return self._t_cancel(lang, items[0]["item_name"])
+            names = ", ".join(i["item_name"] for i in items)
+            return self._t_cancel(lang, names)
 
         if intent == "MODIFY":
             if items:
@@ -225,7 +241,10 @@ class LLMResponseGenerator:
             return self._t_modify(lang, "the item", "as requested")
 
         if intent == "CONFIRM":
-            total = order.get("subtotal", 0) if order else 0
+            # Use session_order (accumulated cart) — order is only current turn's items
+            session_order = pipeline_result.get("session_order")
+            confirm_order = session_order or order
+            total = confirm_order.get("subtotal", 0) if confirm_order else 0
             return self._t_confirm(lang, total)
 
         # Disambiguation
@@ -270,11 +289,33 @@ class LLMResponseGenerator:
     @staticmethod
     def _t_cancel(lang: str, item_name: str) -> str:
         templates = {
-            "en": f"Removed {item_name} from your order.",
-            "hi": f"{item_name} hata diya.",
-            "gu": f"{item_name} દૂર કર્યું.",
-            "mr": f"{item_name} काढले.",
-            "kn": f"{item_name} ತೆಗೆದುಹಾಕಲಾಗಿದೆ.",
+            "en": f"Done, removed {item_name}. Anything else?",
+            "hi": f"{item_name} hata diya. Aur kuch badalna hai?",
+            "gu": f"{item_name} દૂર કર્યું. બીજું કંઈ જોઈએ?",
+            "mr": f"{item_name} कढले. आणखी काही हवे का?",
+            "kn": f"{item_name} ತೆಗೆದುಹಾಕಲಾಗಿದೆ. ಇನ್ನೇನಾದರೂ ಬೇಕೇ?",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_cancel_all(lang: str) -> str:
+        templates = {
+            "en": "Order cleared. Would you like to start fresh?",
+            "hi": "Order clear ho gaya. Naya order shuru karein?",
+            "gu": "ઓર્ડર ક્લિયર થઈ ગયું. ફરીથી શરૂ કરશો?",
+            "mr": "ऑर्डर क्लियर केले. पुन्हा सुरू करायचे का?",
+            "kn": "ಆರ್ಡರ್ ಕ್ಲಿಯರ್ ಆಯಿತು. ಹೊಸದಾಗಿ ಶುರು ಮಾಡೋಣ?",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_cancel_clarify(lang: str) -> str:
+        templates = {
+            "en": "Which item should I remove? Say the item name.",
+            "hi": "Kaunsa item hatana hai? Item ka naam bolein.",
+            "gu": "કયું આઇટમ દૂર કરવું છે? આઇટમનું નામ બોલો.",
+            "mr": "कोणते आयटम काढायचे? आयटमचे नाव सांगा.",
+            "kn": "ಯಾವ ಐಟಂ ತೆಗೆದುಹಾಕಬೇಕು? ಐಟಂ ಹೆಸರು ಹೇಳಿ.",
         }
         return templates.get(lang, templates["en"])
 
@@ -331,6 +372,28 @@ class LLMResponseGenerator:
             "gu": "થોડું વધુ બોલો.",
             "mr": "थोडे अधिक बोला.",
             "kn": "ಸ್ವಲ್ಪ ಹೆಚ್ಚು ಮಾತನಾಡಿ.",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_done(lang: str) -> str:
+        templates = {
+            "en": "Should I place the order now?",
+            "hi": "Kya order place kar doon?",
+            "gu": "\u0a93\u0ab0\u0acd\u0aa1\u0ab0 \u0aae\u0ac2\u0a95\u0ac0 \u0aa6\u0a89\u0a82?",
+            "mr": "\u0911\u0930\u094d\u0921\u0930 \u0932\u093e\u0935\u0942 \u0915\u093e?",
+            "kn": "\u0c86\u0cb0\u0ccd\u0ca1\u0cb0\u0ccd \u0cae\u0cbe\u0ca1\u0cb2\u0cc7?",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_done_empty(lang: str) -> str:
+        templates = {
+            "en": "You haven't ordered anything yet. What would you like?",
+            "hi": "Abhi kuch order nahi hua hai. Kya mangna hai?",
+            "gu": "\u0ab9\u0a9c\u0ac1 \u0a95\u0a82\u0a88 \u0a93\u0ab0\u0acd\u0aa1\u0ab0 \u0aa8\u0aa5\u0ac0. \u0ab6\u0ac1\u0a82 \u0a9c\u0acb\u0a88\u0a8f?",
+            "mr": "\u0905\u091c\u0942\u0928 \u0915\u093e\u0939\u0940 \u0911\u0930\u094d\u0921\u0930 \u0928\u093e\u0939\u0940. \u0915\u093e\u092f \u0939\u0935\u0947?",
+            "kn": "\u0c87\u0ca8\u0ccd\u0ca8\u0cc2 \u0caf\u0cbe\u0cb5\u0cc1\u0ca6\u0cc7 \u0c86\u0cb0\u0ccd\u0ca1\u0cb0\u0ccd \u0c87\u0cb2\u0ccd\u0cb2. \u0c8f\u0ca8\u0cc1 \u0cac\u0cc7\u0c95\u0cc1?",
         }
         return templates.get(lang, templates["en"])
 

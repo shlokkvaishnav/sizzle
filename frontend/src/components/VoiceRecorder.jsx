@@ -1,27 +1,162 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
 import { Mic } from 'lucide-react'
 
 const VISUALIZER_BARS = 48
+const SPEECH_THRESHOLD = 12       // avg freq-bin value above this = speech
+const SILENCE_TIMEOUT_MS = 2500   // ms of post-speech silence → auto-stop
+const MAX_WAIT_NO_SPEECH_MS = 6000 // ms with no speech → auto-stop
+const MAX_RECORD_MS = 15000       // hard cap on recording length
 
-export default function VoiceRecorder({ onRecorded, onStartRecording }) {
+const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
+  const { onRecorded, onStartRecording, autoListen, onAutoListenSilence } = props
+
   const [state, setState] = useState('idle') // idle | recording | processing
-  const mediaRecorder = useRef(null)
-  const chunks = useRef([])
-  const analyserRef = useRef(null)
+  const mediaRecorderRef = useRef(null)
+  const chunksRef = useRef([])
+  const analyserCtxRef = useRef(null)
   const animFrameRef = useRef(null)
-  const [levels, setLevels] = useState([0, 0, 0, 0, 0])
+  const streamRef = useRef(null)
   const [time, setTime] = useState(0)
   const [barHeights, setBarHeights] = useState(
     Array.from({ length: VISUALIZER_BARS }, () => 4)
   )
 
+  // Stable refs for props (avoids stale closures in async / RAF callbacks)
+  const propsRef = useRef({})
+  propsRef.current = { onRecorded, onStartRecording, autoListen, onAutoListenSilence }
+
+  // Silence-detection refs
+  const silenceStartRef = useRef(null)
+  const speechDetectedRef = useRef(false)
+  const recordingStartRef = useRef(null)
+  const stoppedRef = useRef(false)
+
   const isRecording = state === 'recording'
   const isProcessing = state === 'processing'
 
-  // Cleanup animation frame on unmount
+  // ── Stable function refs (always latest closure) ──
+  const fnRef = useRef({})
+
+  fnRef.current.stopRecording = () => {
+    if (mediaRecorderRef.current?.state === 'recording') {
+      mediaRecorderRef.current.stop()
+    }
+  }
+
+  fnRef.current.startRecording = async (interrupt = true) => {
+    try {
+      // Interrupt TTS only on manual click (not auto-listen restart)
+      if (interrupt && propsRef.current.onStartRecording) {
+        propsRef.current.onStartRecording()
+      }
+
+      // Reset silence-detection state
+      silenceStartRef.current = null
+      speechDetectedRef.current = false
+      recordingStartRef.current = Date.now()
+      stoppedRef.current = false
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      const audioCtx = new AudioContext()
+      const source = audioCtx.createMediaStreamSource(stream)
+      const analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 256
+      source.connect(analyser)
+      analyserCtxRef.current = { audioCtx, analyser }
+
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+      mediaRecorderRef.current = recorder
+      chunksRef.current = []
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data)
+      }
+
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
+        stream.getTracks().forEach(t => t.stop())
+        streamRef.current = null
+        if (analyserCtxRef.current?.audioCtx) analyserCtxRef.current.audioCtx.close()
+        if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+
+        // Auto-listen mode + no speech detected → skip processing, go idle
+        if (propsRef.current.autoListen && !speechDetectedRef.current) {
+          setState('idle')
+          if (propsRef.current.onAutoListenSilence) propsRef.current.onAutoListenSilence()
+          return
+        }
+
+        setState('processing')
+        if (propsRef.current.onRecorded) {
+          Promise.resolve(propsRef.current.onRecorded(blob)).finally(() => setState('idle'))
+        } else {
+          setState('idle')
+        }
+      }
+
+      recorder.start()
+      setState('recording')
+
+      // ── Analysis loop (visualizer + silence detection) ──
+      const data = new Uint8Array(analyser.frequencyBinCount)
+      const tick = () => {
+        if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== 'recording') return
+        analyser.getByteFrequencyData(data)
+        const sum = data.reduce((a, b) => a + b, 0)
+        const avg = sum / data.length
+
+        // Silence detection (only when auto-listen is on)
+        if (propsRef.current.autoListen && !stoppedRef.current) {
+          const now = Date.now()
+          const elapsed = now - (recordingStartRef.current || now)
+
+          if (avg > SPEECH_THRESHOLD) {
+            speechDetectedRef.current = true
+            silenceStartRef.current = null
+          } else if (speechDetectedRef.current) {
+            // Had speech, now silent
+            if (!silenceStartRef.current) {
+              silenceStartRef.current = now
+            } else if (now - silenceStartRef.current > SILENCE_TIMEOUT_MS) {
+              stoppedRef.current = true
+              fnRef.current.stopRecording()
+              return
+            }
+          } else if (elapsed > MAX_WAIT_NO_SPEECH_MS) {
+            // Never heard speech — give up
+            stoppedRef.current = true
+            fnRef.current.stopRecording()
+            return
+          }
+
+          if (elapsed > MAX_RECORD_MS) {
+            stoppedRef.current = true
+            fnRef.current.stopRecording()
+            return
+          }
+        }
+
+        animFrameRef.current = requestAnimationFrame(tick)
+      }
+      animFrameRef.current = requestAnimationFrame(tick)
+    } catch (err) {
+      console.error('Mic access failed:', err)
+      alert('Microphone access denied. Please allow microphone access.')
+    }
+  }
+
+  // Expose start/stop to parent via ref
+  useImperativeHandle(ref, () => ({
+    startRecording: () => fnRef.current.startRecording(false),
+    stopRecording: () => fnRef.current.stopRecording(),
+  }))
+
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop())
     }
   }, [])
 
@@ -53,70 +188,6 @@ export default function VoiceRecorder({ onRecorded, onStartRecording }) {
     return () => { if (frameId) cancelAnimationFrame(frameId) }
   }, [isRecording])
 
-  const updateLevels = (analyser) => {
-    const data = new Uint8Array(analyser.frequencyBinCount)
-    const tick = () => {
-      analyser.getByteFrequencyData(data)
-      const step = Math.floor(data.length / 5)
-      const newLevels = Array.from({ length: 5 }, (_, i) => {
-        const slice = data.slice(i * step, (i + 1) * step)
-        const avg = slice.reduce((a, b) => a + b, 0) / slice.length
-        return Math.min(avg / 255, 1)
-      })
-      setLevels(newLevels)
-      animFrameRef.current = requestAnimationFrame(tick)
-    }
-    tick()
-  }
-
-  const startRecording = async () => {
-    try {
-      // Notify parent to stop any playing audio (interrupt)
-      if (onStartRecording) onStartRecording()
-
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const audioCtx = new AudioContext()
-      const source = audioCtx.createMediaStreamSource(stream)
-      const analyser = audioCtx.createAnalyser()
-      analyser.fftSize = 256
-      source.connect(analyser)
-      analyserRef.current = { audioCtx, analyser }
-
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
-      mediaRecorder.current = recorder
-      chunks.current = []
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.current.push(e.data)
-      }
-
-      recorder.onstop = () => {
-        const blob = new Blob(chunks.current, { type: 'audio/webm' })
-        stream.getTracks().forEach(t => t.stop())
-        if (analyserRef.current?.audioCtx) analyserRef.current.audioCtx.close()
-        if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
-        setLevels([0, 0, 0, 0, 0])
-        setState('processing')
-        if (onRecorded) {
-          Promise.resolve(onRecorded(blob)).finally(() => setState('idle'))
-        }
-      }
-
-      recorder.start()
-      setState('recording')
-      updateLevels(analyser)
-    } catch (err) {
-      console.error('Mic access failed:', err)
-      alert('Microphone access denied. Please allow microphone access.')
-    }
-  }
-
-  const stopRecording = () => {
-    if (mediaRecorder.current && mediaRecorder.current.state === 'recording') {
-      mediaRecorder.current.stop()
-    }
-  }
-
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
@@ -126,9 +197,9 @@ export default function VoiceRecorder({ onRecorded, onStartRecording }) {
   const handleClick = () => {
     if (isProcessing) return
     if (isRecording) {
-      stopRecording()
+      fnRef.current.stopRecording()
     } else {
-      startRecording()
+      fnRef.current.startRecording(true) // true = interrupt TTS
     }
   }
 
@@ -166,10 +237,7 @@ export default function VoiceRecorder({ onRecorded, onStartRecording }) {
             className={`ai-voice-bar${isRecording ? ' ai-voice-bar--active' : ''}`}
             style={
               isRecording
-                ? {
-                  height: `${barHeights[i]}%`,
-                  animationDelay: `${i * 0.05}s`,
-                }
+                ? { height: `${barHeights[i]}%`, animationDelay: `${i * 0.05}s` }
                 : { height: 4 }
             }
           />
@@ -178,8 +246,15 @@ export default function VoiceRecorder({ onRecorded, onStartRecording }) {
 
       {/* Status label */}
       <p className="ai-voice-status">
-        {isProcessing ? 'Processing…' : isRecording ? 'Listening...' : 'Click to speak'}
+        {isProcessing
+          ? 'Processing…'
+          : isRecording
+            ? 'Listening...'
+            : autoListen ? 'Speak anytime…' : 'Click to speak'}
       </p>
     </div>
   )
-}
+})
+
+VoiceRecorder.displayName = 'VoiceRecorder'
+export default VoiceRecorder

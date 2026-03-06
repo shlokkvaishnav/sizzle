@@ -10,15 +10,17 @@ import logging
 
 logger = logging.getLogger("petpooja.voice.pipeline")
 
-from .stt import transcribe
+from .stt import transcribe, _redetect_language
 from .normalizer import normalize
-from .intent_mapper import classify_intent, classify_intents
+from .intent_mapper import classify_intent, classify_intents, is_cancel_all
 from .item_matcher import build_search_corpus, extract_all_items, get_alternatives
 from .quantity_extractor import extract_quantities_for_items
 from .modifier_extractor import extract_modifiers, extract_modifiers_with_target
 from .session_store import (
     get_session, update_session, update_session_compound, get_session_items,
+    get_session_language, set_session_language,
 )
+from .voice_config import cfg
 from . import pipeline_errors as errs
 
 
@@ -75,8 +77,10 @@ class VoicePipeline:
 
     def process_text(self, text: str, session_id: str = None) -> dict:
         """Process text input (skips STT). For testing without audio."""
+        session_lang = get_session_language(session_id) if session_id else None
+        lang = _redetect_language(text, "unknown", 0.0, session_language=session_lang)
         return self._run_pipeline(text, original_transcript=text,
-                                  detected_language="unknown",
+                                  detected_language=lang,
                                   session_id=session_id)
 
     def process_audio(self, audio_path: str, session_id: str = None) -> dict:
@@ -89,6 +93,18 @@ class VoicePipeline:
         except RuntimeError as e:
             sr = errs.stt_model_error(str(e))
             return self._error_response(sr, session_id=session_id)
+
+        # Apply session language stickiness: re-detect with session hint
+        if session_id:
+            session_lang = get_session_language(session_id)
+            if session_lang:
+                transcript = stt_result.get("transcript", "").strip()
+                whisper_lang = stt_result.get("whisper_raw_language", stt_result.get("detected_language", "unknown"))
+                whisper_conf = stt_result.get("language_confidence", 0.0)
+                refined_lang = _redetect_language(transcript, whisper_lang, whisper_conf, session_language=session_lang)
+                if refined_lang != stt_result["detected_language"]:
+                    logger.info("Session language override: %s → %s", stt_result["detected_language"], refined_lang)
+                    stt_result["detected_language"] = refined_lang
 
         # Hard-abort only when there's truly nothing to work with
         # (no speech detected or completely empty transcript).
@@ -204,22 +220,41 @@ class VoicePipeline:
                             user_messages.append(sr.user_message)
                             item["out_of_stock"] = True
 
-                # Zero match: generate recovery suggestions
-                if clause_intent == "ORDER" and not enriched:
-                    fuzzy_suggestions = getattr(extract_all_items, "_last_fuzzy_suggestions", [])
-                    if not fuzzy_suggestions:
-                        fuzzy_suggestions = get_alternatives(clause, self.corpus, top_n=3)
-                    # Enrich suggestions with item names from DB
-                    enriched_suggestions = []
-                    for s in fuzzy_suggestions:
-                        db_item = menu_map.get(s["item_id"])
-                        enriched_suggestions.append({
-                            **s,
-                            "item_name": db_item.name if db_item else s.get("matched_as", "?"),
-                        })
-                    sr = errs.zero_item_matches(clause, enriched_suggestions)
-                    stage_results.append(sr.to_dict())
-                    user_messages.append(sr.user_message)
+                # Zero match handling — different for ORDER vs CANCEL
+                if not enriched:
+                    if clause_intent == "ORDER":
+                        # ORDER with no match → suggest alternatives
+                        fuzzy_suggestions = getattr(extract_all_items, "_last_fuzzy_suggestions", [])
+                        if not fuzzy_suggestions:
+                            fuzzy_suggestions = get_alternatives(clause, self.corpus, top_n=3)
+                        enriched_suggestions = []
+                        for s in fuzzy_suggestions:
+                            db_item = menu_map.get(s["item_id"])
+                            enriched_suggestions.append({
+                                **s,
+                                "item_name": db_item.name if db_item else s.get("matched_as", "?"),
+                            })
+                        sr = errs.zero_item_matches(clause, enriched_suggestions)
+                        stage_results.append(sr.to_dict())
+                        user_messages.append(sr.user_message)
+                    elif clause_intent == "CANCEL":
+                        # CANCEL with no specific items
+                        if is_cancel_all(clause):
+                            # "cancel everything" / "hata do sab" → clear all
+                            pass  # _apply_cancel(session, []) clears cart
+                        else:
+                            # "cancel the xyz" where xyz wasn't matched
+                            # → don't clear cart, ask for clarification
+                            sr = errs.StageResult(
+                                status=errs.PARTIAL,
+                                error_type="cancel_item_not_found",
+                                user_message="Which item should I remove? Please say the item name.",
+                            )
+                            stage_results.append(sr.to_dict())
+                            user_messages.append(sr.user_message)
+                            # Mark this CANCEL as needing clarification so we
+                            # don't accidentally clear the entire cart
+                            clause_intent = "_CANCEL_NEEDS_CLARIFY"
 
                 # Ambiguous match: generate active prompts
                 for item in enriched:
@@ -314,6 +349,8 @@ class VoicePipeline:
                 update_session_compound(session_id, intent_actions)
             else:
                 update_session(session_id, all_enriched_items, primary_intent)
+            # Store detected language for session stickiness
+            set_session_language(session_id, detected_language)
             session_items = get_session_items(session_id)
             session_context = get_session(session_id)
         else:
@@ -336,6 +373,31 @@ class VoicePipeline:
             or any(sr.get("status") == "failure" for sr in stage_results)
         )
 
+        # Build a session-wide order from all accumulated items
+        session_order = None
+        if session_id and session_items:
+            # Normalize items: ensure "name" key exists for generate_kot/save_order_to_db
+            normalized_items = []
+            for si in session_items:
+                item_copy = dict(si)
+                if "name" not in item_copy and "item_name" in item_copy:
+                    item_copy["name"] = item_copy["item_name"]
+                normalized_items.append(item_copy)
+
+            s_subtotal = sum(i.get("line_total", 0) for i in normalized_items)
+            session_order = {
+                "order_id": session_id,
+                "items": normalized_items,
+                "item_count": len(normalized_items),
+                "total_quantity": sum(i.get("quantity", 1) for i in normalized_items),
+                "subtotal": round(s_subtotal, 2),
+                "tax": round(s_subtotal * cfg.ORDER_TAX_RATE, 2),
+                "total": round(s_subtotal * (1 + cfg.ORDER_TAX_RATE), 2),
+                "order_type": "dine_in",
+                "table_number": None,
+                "status": "building",
+            }
+
         # Deduplicate user messages while preserving order
         seen_msgs = set()
         unique_messages = []
@@ -357,6 +419,7 @@ class VoicePipeline:
             "items": all_enriched_items,
             "upsell_suggestions": upsell_suggestions,
             "order": order,
+            "session_order": session_order,
             "needs_clarification": needs_clarification,
             "disambiguation": disambiguation_items,
             "session_id": session_id,

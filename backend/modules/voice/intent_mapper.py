@@ -29,8 +29,28 @@ _CLAUSE_SPLITTERS = re.compile(
 
 # ── Intent patterns — linguistic ordering phrases ──
 INTENT_PATTERNS = {
+    "DONE": [
+        # English
+        r"\b(done|that'?s?\s*it|that'?s?\s*all|that\s*will\s*be\s*all|enough|no\s*more|nothing\s*else|nothing\s*more|over|finish)\b",
+        # Hindi / Hinglish (+ Whisper spelling variants for "bas")
+        r"\b(bas|buss|bus|boss|bass|ho\s*gaya|ho\s*gya|hogaya|hogya|khatam|aur\s*nahi|aur\s*kuch\s*nahi|itna\s*hi|bas\s*kar|bus\s*kar|ho\s*gai|hogai)\b",
+        # Gujarati romanized
+        r"\b(bas\s*thai\s*gay?u|thayu|thai\s*gayu|aatle|puru|puro)\b",
+        # Marathi romanized
+        r"\b(jhale?|zhale?|bas\s*zale|sampale?|puro|zale|jhala)\b",
+    ],
     "CONFIRM": [
-        r"\b(yes|haan|ha|okay|ok|theek hai|sahi|bilkul|confirm|done|ho gaya|correct|right)\b",
+        # English
+        r"\b(yes|yeah|yep|yup|sure|okay|ok|confirm|correct|right|go\s*ahead|definitely|absolutely|place\s*(?:the\s*)?order)\b",
+        # Hindi / Hinglish
+        r"\b(haan|haa|ha\s+ji|haji|theek\s*hai|thik\s*hai|sahi|bilkul|pakka|kar\s*do|kardo|karo|laga\s*do|lagado|lagao|de\s*do|dedo)\b",
+        # Hindi compound: "order kar do", "order laga do", "order de do"
+        r"\border\s*(?:kar\s*do|kardo|karo|laga\s*do|lagado|lagao|de\s*do|dedo|place\s*kar)\b",
+        # Gujarati romanized
+        r"\b(haa|chale|chalse|karso|muki\s*d[oy]o?|muko)\b",
+        # Marathi romanized ("ho" but not "ho gaya"/"ho gya")
+        r"\bho\b(?!\s*g[ay])",
+        r"\b(chalu\s*kar|lava|dya|ghya|order\s*dya|thik\s*aahe)\b",
     ],
     "CANCEL": [
         r"\b(cancel|remove|hatao|hata\s+do|mat\s+dena|nahi\s+chahiye|wrong|galat|undo|nikal)\b",
@@ -79,11 +99,17 @@ def _classify_single_clause(text: str) -> Tuple[str, str]:
 
     text_lower = text.lower().strip()
 
-    # 1. CONFIRM
+    # 1. CONFIRM (explicit yes/confirm)
     for pattern in INTENT_PATTERNS["CONFIRM"]:
         match = re.search(pattern, text_lower)
         if match:
             return "CONFIRM", match.group()
+
+    # 1b. DONE ("that's it", "bas", "ho gaya" — signals ordering is finished)
+    for pattern in INTENT_PATTERNS["DONE"]:
+        match = re.search(pattern, text_lower)
+        if match:
+            return "DONE", match.group()
 
     # 2. CANCEL
     for pattern in INTENT_PATTERNS["CANCEL"]:
@@ -144,7 +170,7 @@ def classify_intent(text: str) -> Tuple[str, str]:
     if not results:
         return "UNKNOWN", ""
     # Priority: CANCEL > CONFIRM > MODIFY > REPEAT > QUERY > ORDER > UNKNOWN
-    priority = ["CANCEL", "CONFIRM", "MODIFY", "REPEAT", "QUERY", "ORDER", "UNKNOWN"]
+    priority = ["CANCEL", "CONFIRM", "DONE", "MODIFY", "REPEAT", "QUERY", "ORDER", "UNKNOWN"]
     for p in priority:
         for r in results:
             if r["intent"] == p:
@@ -200,6 +226,24 @@ def classify_intents(text: str) -> list[dict]:
         results = meaningful
 
     return results
+
+
+# ── Cancel-all detection ──
+_CANCEL_ALL_PATTERNS = [
+    r"\b(everything|every\s+thing|all|sab|sab\s+kuch|sara|saara|poora|pura|complete)\b",
+    r"\b(cancel\s+(?:the\s+)?order|order\s+cancel|reset|clear|start\s*over|shuru\s+se)\b",
+    r"\b(don'?t\s+want\s+anything|kuch\s+nahi|nahi\s+chahiye\s+kuch|sab\s+hata\s+do)\b",
+    r"\b(clear\s+(?:the\s+)?cart|empty\s+(?:the\s+)?cart|remove\s+(?:all|everything|sab))\b",
+]
+
+
+def is_cancel_all(text: str) -> bool:
+    """Check if a cancel utterance means 'cancel everything / clear the order'."""
+    text_lower = text.lower().strip()
+    for pattern in _CANCEL_ALL_PATTERNS:
+        if re.search(pattern, text_lower):
+            return True
+    return False
 
 
 _ORDER_START = re.compile(
