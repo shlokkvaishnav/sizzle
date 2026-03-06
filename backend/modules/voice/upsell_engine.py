@@ -1,4 +1,4 @@
-"""
+﻿"""
 upsell_engine.py — Real-Time Upsell Suggestions
 ==================================================
 Two strategies:
@@ -11,7 +11,7 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from models import MenuItem, SaleTransaction
+from models import MenuItem, VSale
 from modules.voice.voice_config import cfg
 
 logger = logging.getLogger("petpooja.voice.upsell")
@@ -134,8 +134,8 @@ def suggest_upsells(
 
     # Find orders that contain the current items
     related_order_ids = (
-        db.query(SaleTransaction.order_id)
-        .filter(SaleTransaction.item_id.in_(ordered_item_ids))
+        db.query(VSale.order_id)
+        .filter(VSale.item_id.in_(ordered_item_ids))
         .distinct()
         .limit(cfg.UPSELL_RELATED_ORDERS_LIMIT)
         .all()
@@ -148,15 +148,15 @@ def suggest_upsells(
     # Find items frequently in those same orders
     co_items = (
         db.query(
-            SaleTransaction.item_id,
-            func.count(SaleTransaction.id).label("co_count"),
+            VSale.item_id,
+            func.count(VSale.id).label("co_count"),
         )
         .filter(
-            SaleTransaction.order_id.in_(related_orders),
-            ~SaleTransaction.item_id.in_(ordered_item_ids),
+            VSale.order_id.in_(related_orders),
+            ~VSale.item_id.in_(ordered_item_ids),
         )
-        .group_by(SaleTransaction.item_id)
-        .order_by(func.count(SaleTransaction.id).desc())
+        .group_by(VSale.item_id)
+        .order_by(func.count(VSale.id).desc())
         .limit(cfg.UPSELL_CO_ITEMS_LIMIT)
         .all()
     )

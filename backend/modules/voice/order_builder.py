@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from models import Order, OrderItem, KOT
+from models import Order, OrderItem, KOT, Restaurant
 from modules.voice.voice_config import cfg
 
 logger = logging.getLogger("petpooja.voice.order_builder")
@@ -173,7 +173,7 @@ def generate_kot(order: dict) -> dict:
     }
 
 
-def save_order_to_db(order: dict, kot: dict, db: Session) -> dict:
+def save_order_to_db(order: dict, kot: dict, db: Session, restaurant_id: int | None = None) -> dict:
     """
     Save a confirmed order to the database.
     Writes Order + OrderItem rows + KOT row in a transaction.
@@ -182,6 +182,7 @@ def save_order_to_db(order: dict, kot: dict, db: Session) -> dict:
         order: Built order dict from build_order()
         kot: KOT dict from generate_kot()
         db: Database session
+        restaurant_id: Restaurant ID (resolved automatically if None)
 
     Returns:
         Dict with saved order_id and kot_id
@@ -190,10 +191,19 @@ def save_order_to_db(order: dict, kot: dict, db: Session) -> dict:
         Exception: rolls back transaction on any error
     """
     try:
+        # Resolve restaurant_id — use provided value or fall back to first restaurant
+        if not restaurant_id:
+            first_restaurant = db.query(Restaurant).order_by(Restaurant.id.asc()).first()
+            if first_restaurant:
+                restaurant_id = first_restaurant.id
+            else:
+                raise ValueError("No restaurants configured — cannot save order")
+
         # Write Order row
         db_order = Order(
             order_id=order["order_id"],
             order_number=order["order_id"],
+            restaurant_id=restaurant_id,
             total_amount=order["total"],
             status="confirmed",
             order_type=order.get("order_type", "dine_in"),
@@ -206,7 +216,7 @@ def save_order_to_db(order: dict, kot: dict, db: Session) -> dict:
         # Write OrderItem rows
         for item in order["items"]:
             db_item = OrderItem(
-                order_id=order["order_id"],
+                order_pk=db_order.id,
                 item_id=item.get("item_id"),
                 quantity=item.get("quantity", 1),
                 unit_price=item.get("unit_price", 0),
@@ -219,6 +229,7 @@ def save_order_to_db(order: dict, kot: dict, db: Session) -> dict:
         if kot and kot.get("kot_id"):
             db_kot = KOT(
                 kot_id=kot["kot_id"],
+                order_pk=db_order.id,
                 order_id=order["order_id"],
                 items_summary=kot.get("items_summary", []),
                 print_ready=kot.get("print_ready", ""),

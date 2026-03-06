@@ -26,7 +26,7 @@
 ## Table of Contents
 
 1. [Clean Slate + Enum Types](#1-clean-slate--enum-types)
-2. [Table DDL (15 tables + 1 view)](#2-table-ddl)
+2. [Table DDL (13 tables + 1 view)](#2-table-ddl)
 3. [Deferred Foreign Keys](#3-deferred-foreign-keys)
 4. [The `v_sales` View](#4-the-v_sales-view)
 5. [Feature ↔ Table Matrix](#5-feature--table-matrix)
@@ -51,16 +51,12 @@ DROP TABLE IF EXISTS kots CASCADE;
 DROP TABLE IF EXISTS order_items CASCADE;
 DROP TABLE IF EXISTS restaurant_tables CASCADE;
 DROP TABLE IF EXISTS orders CASCADE;
-DROP TABLE IF EXISTS shifts CASCADE;
 DROP TABLE IF EXISTS menu_items CASCADE;
 DROP TABLE IF EXISTS categories CASCADE;
-DROP TABLE IF EXISTS staff CASCADE;
 DROP TABLE IF EXISTS restaurant_settings CASCADE;
 DROP TABLE IF EXISTS restaurants CASCADE;
 
-DROP TYPE IF EXISTS staff_role CASCADE;
 DROP TYPE IF EXISTS table_status CASCADE;
-DROP TYPE IF EXISTS shift_status CASCADE;
 DROP TYPE IF EXISTS order_status CASCADE;
 DROP TYPE IF EXISTS order_type CASCADE;
 DROP TYPE IF EXISTS order_source CASCADE;
@@ -72,9 +68,7 @@ DROP TYPE IF EXISTS measure_unit CASCADE;
 -- ║  STEP 2 — Custom ENUM types (4 bytes, type-safe)        ║
 -- ╚══════════════════════════════════════════════════════════╝
 
-CREATE TYPE staff_role      AS ENUM ('waiter', 'cashier', 'manager', 'chef');
 CREATE TYPE table_status    AS ENUM ('empty', 'occupied', 'reserved', 'cleaning');
-CREATE TYPE shift_status    AS ENUM ('open', 'closed');
 CREATE TYPE order_status    AS ENUM ('building', 'confirmed', 'cancelled');
 CREATE TYPE order_type      AS ENUM ('dine_in', 'takeaway', 'delivery');
 CREATE TYPE order_source    AS ENUM ('voice', 'manual');
@@ -125,49 +119,6 @@ CREATE TABLE restaurant_settings (
     profile_extras  JSONB           NOT NULL DEFAULT '{}',
     updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
-```
-
----
-
-### staff
-
-```sql
-CREATE TABLE staff (
-    id              SERIAL PRIMARY KEY,
-    restaurant_id   INTEGER         NOT NULL
-                    REFERENCES restaurants(id) ON DELETE CASCADE,
-    name            VARCHAR(150)    NOT NULL,
-    role            staff_role      NOT NULL DEFAULT 'waiter',
-    pin_hash        VARCHAR(128)    NOT NULL,
-    phone           VARCHAR(20),
-    is_active       BOOLEAN         NOT NULL DEFAULT TRUE,
-    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_staff_restaurant ON staff (restaurant_id) WHERE is_active;
-```
-
----
-
-### shifts
-
-```sql
-CREATE TABLE shifts (
-    id              SERIAL PRIMARY KEY,
-    restaurant_id   INTEGER         NOT NULL
-                    REFERENCES restaurants(id) ON DELETE CASCADE,
-    name            VARCHAR(50),
-    started_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    ended_at        TIMESTAMPTZ,
-    opened_by       INTEGER         NOT NULL REFERENCES staff(id),
-    closed_by       INTEGER         REFERENCES staff(id),
-    opening_cash    NUMERIC(10,2)   NOT NULL DEFAULT 0,
-    closing_cash    NUMERIC(10,2),
-    status          shift_status    NOT NULL DEFAULT 'open'
-);
-
-CREATE INDEX idx_shifts_open ON shifts (restaurant_id) WHERE status = 'open';
-CREATE INDEX idx_shifts_started ON shifts USING BRIN (started_at);
 ```
 
 ---
@@ -270,8 +221,6 @@ CREATE TABLE orders (
     status          order_status    NOT NULL DEFAULT 'building',
     order_type      order_type      NOT NULL DEFAULT 'dine_in',
     table_id        INTEGER         REFERENCES restaurant_tables(id) ON DELETE SET NULL,
-    staff_id        INTEGER         REFERENCES staff(id) ON DELETE SET NULL,
-    shift_id        INTEGER         REFERENCES shifts(id) ON DELETE SET NULL,
     source          order_source    NOT NULL DEFAULT 'voice',
 
     -- Fields previously missing (accepted by API but never stored)
@@ -425,7 +374,6 @@ CREATE TABLE stock_logs (
     change_qty      NUMERIC(10,2)   NOT NULL,
     reason          stock_reason    NOT NULL,
     note            TEXT,
-    staff_id        INTEGER         REFERENCES staff(id) ON DELETE SET NULL,
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 
@@ -476,7 +424,7 @@ SELECT
     oi.unit_price                   AS unit_price,
     oi.line_total                   AS total_price,
     o.order_type::TEXT              AS order_type,
-    o.shift_id                      AS shift_id,
+
     COALESCE(o.settled_at, o.updated_at) AS sold_at
 FROM order_items oi
 JOIN orders o ON o.id = oi.order_pk
@@ -486,7 +434,7 @@ WHERE o.status = 'confirmed';
 **Why this is better:**
 - **No write amplification** — settle just sets `orders.status = 'confirmed'` + `settled_at = NOW()`. No more INSERT loop creating N sale_transaction rows.
 - **Always consistent** — if you edit an order item, analytics update automatically.
-- **No missing columns** — the `shift_id` bug that crashed settle is gone (it comes from orders directly).
+- **No missing columns** — the settled_at bug that crashed settle is gone (it comes from orders directly).
 - **Same query interface** — `SELECT * FROM v_sales WHERE item_id = 5` works identically to the old table.
 
 ---
@@ -497,8 +445,6 @@ WHERE o.status = 'confirmed';
 |---------|---------------------|
 | **Auth login/signup** | `restaurants` |
 | **Restaurant profile** | `restaurants`, `restaurant_settings` |
-| **Staff management** | `staff` |
-| **Shift management** | `shifts`, `staff` |
 | **Menu management** | `menu_items`, `categories` |
 | **Table floor plan** | `restaurant_tables`, `orders`, `order_items`, `menu_items` |
 | **Table book/settle** | `restaurant_tables`, `orders`, `order_items` |
@@ -520,7 +466,7 @@ These backend files need updates to match the new schema:
 | Change | Details |
 |--------|---------|
 | All `Float` → `Numeric` | `from sqlalchemy import Numeric`; use `Numeric(10,2)` |
-| All enum string columns → use `Enum` type | `from sqlalchemy import Enum`; `Column(Enum(staff_role_enum, ...))` or just use `String` and let the DB enum handle it |
+| All enum string columns → use `Enum` type | `from sqlalchemy import Enum`; `Column(Enum(order_status_enum, ...))` or just use `String` and let the DB enum handle it |
 | `OrderItem.order_id` → `OrderItem.order_pk` | `Column(Integer, ForeignKey("orders.id"))` instead of `ForeignKey("orders.order_id")` |
 | `KOT.order_id` → `KOT.order_pk` | Same — integer FK to `orders.id` |
 | `RestaurantTable.current_order_id` | Change from `String(50), ForeignKey("orders.order_id")` → `Integer, ForeignKey("orders.id")` |

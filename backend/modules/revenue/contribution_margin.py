@@ -1,4 +1,4 @@
-"""
+﻿"""
 contribution_margin.py — CM Calculation & Classification
 =========================================================
 Computes contribution margin (Selling Price − Food Cost),
@@ -8,7 +8,7 @@ margin percentage, and profitability tiers for every item.
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
-from models import MenuItem, SaleTransaction
+from models import MenuItem, VSale
 
 
 def calculate_margins(db: Session, restaurant_id: int = None) -> list[dict]:
@@ -43,13 +43,13 @@ def calculate_margins(db: Session, restaurant_id: int = None) -> list[dict]:
     # Revenue per item (aggregate in separate query to avoid GROUP BY issues)
     rev_q = (
         db.query(
-            SaleTransaction.item_id,
-            func.coalesce(func.sum(SaleTransaction.total_price), 0).label("total_revenue"),
+            VSale.item_id,
+            func.coalesce(func.sum(VSale.total_price), 0).label("total_revenue"),
         )
     )
     if restaurant_id:
-        rev_q = rev_q.filter(SaleTransaction.item_id.in_([i.id for i in items]))
-    revenue_rows = rev_q.group_by(SaleTransaction.item_id).all()
+        rev_q = rev_q.filter(VSale.item_id.in_([i.id for i in items]))
+    revenue_rows = rev_q.group_by(VSale.item_id).all()
     revenue_map = {r.item_id: float(r.total_revenue or 0) for r in revenue_rows}
 
     results = []

@@ -1,4 +1,4 @@
-"""
+﻿"""
 trend_analyzer.py — Time-Series Trend Analytics
 =================================================
 Adds the missing time dimension to revenue intelligence:
@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
-from models import MenuItem, SaleTransaction, Category
+from models import MenuItem, VSale, Category
 
 logger = logging.getLogger("petpooja.revenue.trends")
 
@@ -27,11 +27,11 @@ def _batch_item_revenue(db: Session, start: datetime, end: datetime) -> dict[int
     """Get total revenue per item_id in a date range — single query."""
     rows = (
         db.query(
-            SaleTransaction.item_id,
-            func.coalesce(func.sum(SaleTransaction.total_price), 0).label("rev"),
+            VSale.item_id,
+            func.coalesce(func.sum(VSale.total_price), 0).label("rev"),
         )
-        .filter(SaleTransaction.sold_at >= start, SaleTransaction.sold_at < end)
-        .group_by(SaleTransaction.item_id)
+        .filter(VSale.sold_at >= start, VSale.sold_at < end)
+        .group_by(VSale.item_id)
         .all()
     )
     return {r.item_id: float(r.rev) for r in rows}
@@ -41,11 +41,11 @@ def _batch_item_qty(db: Session, start: datetime, end: datetime) -> dict[int, in
     """Get total qty per item_id in a date range — single query."""
     rows = (
         db.query(
-            SaleTransaction.item_id,
-            func.coalesce(func.sum(SaleTransaction.quantity), 0).label("qty"),
+            VSale.item_id,
+            func.coalesce(func.sum(VSale.quantity), 0).label("qty"),
         )
-        .filter(SaleTransaction.sold_at >= start, SaleTransaction.sold_at < end)
-        .group_by(SaleTransaction.item_id)
+        .filter(VSale.sold_at >= start, VSale.sold_at < end)
+        .group_by(VSale.item_id)
         .all()
     )
     return {r.item_id: int(r.qty) for r in rows}
@@ -57,15 +57,15 @@ def _batch_items_revenue(db: Session, item_ids: list[int], start: datetime, end:
         return {}
     rows = (
         db.query(
-            SaleTransaction.item_id,
-            func.coalesce(func.sum(SaleTransaction.total_price), 0).label("rev"),
+            VSale.item_id,
+            func.coalesce(func.sum(VSale.total_price), 0).label("rev"),
         )
         .filter(
-            SaleTransaction.item_id.in_(item_ids),
-            SaleTransaction.sold_at >= start,
-            SaleTransaction.sold_at < end,
+            VSale.item_id.in_(item_ids),
+            VSale.sold_at >= start,
+            VSale.sold_at < end,
         )
-        .group_by(SaleTransaction.item_id)
+        .group_by(VSale.item_id)
         .all()
     )
     return {r.item_id: float(r.rev) for r in rows}
@@ -149,7 +149,7 @@ def calculate_wow_mom(db: Session) -> list[dict]:
 def estimate_price_elasticity(db: Session) -> list[dict]:
     """
     Estimate price elasticity by comparing periods where an item's
-    effective price changed (different unit_price values in SaleTransaction).
+    effective price changed (different unit_price values in VSale).
 
     Returns items where a price change was detected along with
     estimated elasticity coefficient.
@@ -168,18 +168,18 @@ def estimate_price_elasticity(db: Session) -> list[dict]:
         # Get distinct price periods
         price_periods = (
             db.query(
-                SaleTransaction.unit_price,
-                func.min(SaleTransaction.sold_at).label("first_sold"),
-                func.max(SaleTransaction.sold_at).label("last_sold"),
-                func.sum(SaleTransaction.quantity).label("total_qty"),
-                func.count(SaleTransaction.id).label("txn_count"),
+                VSale.unit_price,
+                func.min(VSale.sold_at).label("first_sold"),
+                func.max(VSale.sold_at).label("last_sold"),
+                func.sum(VSale.quantity).label("total_qty"),
+                func.count(VSale.id).label("txn_count"),
             )
             .filter(
-                SaleTransaction.item_id == item.id,
-                SaleTransaction.sold_at >= now - timedelta(days=180),
+                VSale.item_id == item.id,
+                VSale.sold_at >= now - timedelta(days=180),
             )
-            .group_by(SaleTransaction.unit_price)
-            .order_by(func.min(SaleTransaction.sold_at))
+            .group_by(VSale.unit_price)
+            .order_by(func.min(VSale.sold_at))
             .all()
         )
 
@@ -468,11 +468,11 @@ def _detect_quadrant_drift(db: Session, now: datetime) -> list[dict]:
 
 def _item_revenue_in_range(db: Session, item_id: int, start: datetime, end: datetime) -> float:
     result = (
-        db.query(func.coalesce(func.sum(SaleTransaction.total_price), 0))
+        db.query(func.coalesce(func.sum(VSale.total_price), 0))
         .filter(
-            SaleTransaction.item_id == item_id,
-            SaleTransaction.sold_at >= start,
-            SaleTransaction.sold_at < end,
+            VSale.item_id == item_id,
+            VSale.sold_at >= start,
+            VSale.sold_at < end,
         )
         .scalar()
     )
@@ -481,11 +481,11 @@ def _item_revenue_in_range(db: Session, item_id: int, start: datetime, end: date
 
 def _item_qty_in_range(db: Session, item_id: int, start: datetime, end: datetime) -> int:
     result = (
-        db.query(func.coalesce(func.sum(SaleTransaction.quantity), 0))
+        db.query(func.coalesce(func.sum(VSale.quantity), 0))
         .filter(
-            SaleTransaction.item_id == item_id,
-            SaleTransaction.sold_at >= start,
-            SaleTransaction.sold_at < end,
+            VSale.item_id == item_id,
+            VSale.sold_at >= start,
+            VSale.sold_at < end,
         )
         .scalar()
     )
@@ -496,11 +496,11 @@ def _items_revenue_in_range(db: Session, item_ids: list[int], start: datetime, e
     if not item_ids:
         return 0.0
     result = (
-        db.query(func.coalesce(func.sum(SaleTransaction.total_price), 0))
+        db.query(func.coalesce(func.sum(VSale.total_price), 0))
         .filter(
-            SaleTransaction.item_id.in_(item_ids),
-            SaleTransaction.sold_at >= start,
-            SaleTransaction.sold_at < end,
+            VSale.item_id.in_(item_ids),
+            VSale.sold_at >= start,
+            VSale.sold_at < end,
         )
         .scalar()
     )

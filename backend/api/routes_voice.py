@@ -168,8 +168,12 @@ async def process_audio(
     """
     audio_path = await _save_audio_temp(audio)
     try:
-        result = pipeline.process_audio(audio_path, session_id=session_id,
-                                        language_hint=language or None)
+        import asyncio
+        result = await asyncio.to_thread(
+            pipeline.process_audio, audio_path,
+            session_id=session_id,
+            language_hint=language or None,
+        )
 
         # TTS enhancement — non-blocking, degrades gracefully on failure
         tts_result = {"audio_b64": None, "spoken_text": None, "language": result.get("detected_language", "en")}
@@ -272,6 +276,7 @@ async def speak_text(
 @router.post("/confirm-order")
 def confirm_order(
     body: ConfirmOrderInput,
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -288,7 +293,7 @@ def confirm_order(
         kot = generate_kot(order)
 
     try:
-        result = save_order_to_db(order, kot, db)
+        result = save_order_to_db(order, kot, db, restaurant_id=restaurant_id)
         return {
             "success": True,
             "order_id": result["order_id"],

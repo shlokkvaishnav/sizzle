@@ -111,6 +111,7 @@ CREATE INDEX idx_shifts_started ON shifts (started_at DESC);
 
 CREATE TABLE orders (
     id              SERIAL PRIMARY KEY,
+    restaurant_id   INTEGER NOT NULL REFERENCES restaurants(id),
     order_id        VARCHAR(50) UNIQUE NOT NULL,
     order_number    VARCHAR(20),
     total_amount    FLOAT DEFAULT 0.0,

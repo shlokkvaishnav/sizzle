@@ -2,8 +2,7 @@
 models.py — SQLAlchemy ORM Models (Supabase PostgreSQL)
 =========================================================
 All database tables for menu items, categories, orders,
-order items, KOTs, sales transactions, combos, staff,
-restaurant tables, shifts, and ingredients.
+order items, KOTs, combos, restaurant tables, and ingredients.
 Multi-tenant: every major table has restaurant_id FK.
 """
 
@@ -20,6 +19,7 @@ from sqlalchemy import (
     ForeignKey,
     JSON,
     CheckConstraint,
+    ARRAY,
 )
 from sqlalchemy.orm import relationship
 
@@ -52,9 +52,7 @@ class Restaurant(Base):
     # Relationships
     categories = relationship("Category", back_populates="restaurant")
     menu_items = relationship("MenuItem", back_populates="restaurant")
-    staff_members = relationship("Staff", back_populates="restaurant")
     orders = relationship("Order", back_populates="restaurant")
-    shifts = relationship("Shift", back_populates="restaurant")
     settings = relationship("RestaurantSettings", back_populates="restaurant", uselist=False)
 
 
@@ -77,32 +75,6 @@ class RestaurantSettings(Base):
     restaurant = relationship("Restaurant", back_populates="settings")
 
 
-# ── Staff ────────────────────────────────────────
-
-class Staff(Base):
-    """Restaurant employee — waiter, cashier, manager, or chef."""
-
-    __tablename__ = "staff"
-
-    id = Column(Integer, primary_key=True, index=True)
-    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
-    name = Column(String(150), nullable=False)
-    role = Column(String(30), nullable=False, default="waiter")  # waiter | cashier | manager | chef
-    pin_hash = Column(String(128), nullable=False)  # hashed 4-6 digit PIN for POS login
-    phone = Column(String(20))
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=_utcnow)
-
-    restaurant = relationship("Restaurant", back_populates="staff_members")
-    orders = relationship("Order", back_populates="staff", foreign_keys="Order.staff_id")
-    shifts_opened = relationship("Shift", back_populates="opened_by_staff", foreign_keys="Shift.opened_by")
-    shifts_closed = relationship("Shift", back_populates="closed_by_staff", foreign_keys="Shift.closed_by")
-    stock_logs = relationship("StockLog", back_populates="staff")
-
-    __table_args__ = (
-        CheckConstraint("role IN ('waiter','cashier','manager','chef')", name="ck_staff_role"),
-    )
-
 
 # ── Restaurant Tables ────────────────────────────
 
@@ -124,34 +96,6 @@ class RestaurantTable(Base):
         CheckConstraint("status IN ('empty','occupied','reserved','cleaning')", name="ck_table_status"),
     )
 
-
-# ── Shifts ───────────────────────────────────────
-
-class Shift(Base):
-    """Operational shift / cash session. Revenue and orders are grouped by shift."""
-
-    __tablename__ = "shifts"
-
-    id = Column(Integer, primary_key=True, index=True)
-    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
-    name = Column(String(50))  # "Lunch", "Dinner", or auto-generated
-    started_at = Column(DateTime, nullable=False, default=_utcnow)
-    ended_at = Column(DateTime, nullable=True)
-    opened_by = Column(Integer, ForeignKey("staff.id"), nullable=False)
-    closed_by = Column(Integer, ForeignKey("staff.id"), nullable=True)
-    opening_cash = Column(Float, default=0.0)
-    closing_cash = Column(Float, nullable=True)
-    status = Column(String(10), default="open")  # open | closed
-
-    restaurant = relationship("Restaurant", back_populates="shifts")
-    opened_by_staff = relationship("Staff", back_populates="shifts_opened", foreign_keys=[opened_by])
-    closed_by_staff = relationship("Staff", back_populates="shifts_closed", foreign_keys=[closed_by])
-    orders = relationship("Order", back_populates="shift")
-    sale_transactions = relationship("SaleTransaction", back_populates="shift")
-
-    __table_args__ = (
-        CheckConstraint("status IN ('open','closed')", name="ck_shift_status"),
-    )
 
 
 class Category(Base):
@@ -188,7 +132,7 @@ class MenuItem(Base):
     name_gu = Column(String(200))  # Gujarati name
     name_hi_en = Column(String(200))  # Hinglish name
     description = Column(Text)
-    aliases = Column(Text, default="")  # pipe-separated: "pnr tikka|panir tikka|tikka paneer"
+    aliases = Column(ARRAY(Text), default=[])  # ["pnr tikka", "panir tikka", "tikka paneer"]
     category_id = Column(Integer, ForeignKey("categories.id"))
     selling_price = Column(Float, nullable=False)
     food_cost = Column(Float, nullable=False)
@@ -202,7 +146,6 @@ class MenuItem(Base):
 
     restaurant = relationship("Restaurant", back_populates="menu_items")
     category = relationship("Category", back_populates="items")
-    sales = relationship("SaleTransaction", back_populates="item")
     ingredients = relationship("MenuItemIngredient", back_populates="menu_item")
 
     @property
@@ -216,33 +159,13 @@ class MenuItem(Base):
         return (self.contribution_margin / self.selling_price) * 100
 
 
-class SaleTransaction(Base):
-    """Individual sale record — one row per item per order."""
-
-    __tablename__ = "sale_transactions"
-
-    id = Column(Integer, primary_key=True, index=True)
-    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
-    item_id = Column(Integer, ForeignKey("menu_items.id"), nullable=False)
-    order_id = Column(String(50), nullable=False)
-    quantity = Column(Integer, default=1)
-    unit_price = Column(Float, nullable=False)
-    total_price = Column(Float, nullable=False)
-    order_type = Column(String(20), default="dine_in")  # dine_in | takeaway | delivery
-    shift_id = Column(Integer, ForeignKey("shifts.id"), nullable=True)
-    sold_at = Column(DateTime, default=_utcnow)
-
-    item = relationship("MenuItem", back_populates="sales")
-    shift = relationship("Shift", back_populates="sale_transactions")
-
-
 class Order(Base):
     """Completed or in-progress order."""
 
     __tablename__ = "orders"
 
     id = Column(Integer, primary_key=True, index=True)
-    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=False)
     order_id = Column(String(50), unique=True, nullable=False)
     order_number = Column(String(20))  # Human-readable order number
     total_amount = Column(Float, default=0.0)
@@ -250,18 +173,14 @@ class Order(Base):
     order_type = Column(String(20), default="dine_in")
     table_number = Column(String(10))  # kept for backward compat / quick display
     table_id = Column(Integer, ForeignKey("restaurant_tables.id"), nullable=True)
-    staff_id = Column(Integer, ForeignKey("staff.id"), nullable=True)
-    shift_id = Column(Integer, ForeignKey("shifts.id"), nullable=True)
     source = Column(String(20), default="voice")  # voice | manual
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     restaurant = relationship("Restaurant", back_populates="orders")
     order_items = relationship("OrderItem", back_populates="order")
-    kots = relationship("KOT", back_populates="order")
-    staff = relationship("Staff", back_populates="orders", foreign_keys=[staff_id])
+    kots = relationship("KOT", back_populates="order", foreign_keys="[KOT.order_id]")
     table = relationship("RestaurantTable", foreign_keys=[table_id])
-    shift = relationship("Shift", back_populates="orders")
 
 
 class OrderItem(Base):
@@ -270,7 +189,7 @@ class OrderItem(Base):
     __tablename__ = "order_items"
 
     id = Column(Integer, primary_key=True, index=True)
-    order_id = Column(String(50), ForeignKey("orders.order_id"), nullable=False)
+    order_pk = Column(Integer, ForeignKey("orders.id"), nullable=False)
     item_id = Column(Integer, ForeignKey("menu_items.id"), nullable=False)
     quantity = Column(Integer, default=1)
     unit_price = Column(Float, nullable=False)
@@ -288,12 +207,13 @@ class KOT(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     kot_id = Column(String(50), unique=True, nullable=False)  # KOT-YYYYMMDD-XXXX
+    order_pk = Column(Integer, ForeignKey("orders.id"), nullable=False)  # integer FK
     order_id = Column(String(50), ForeignKey("orders.order_id"), nullable=False)
     items_summary = Column(JSON, nullable=False)  # [{name, qty, modifiers}]
     print_ready = Column(Text)  # Plain-text kitchen-friendly format
     created_at = Column(DateTime, default=_utcnow)
 
-    order = relationship("Order", back_populates="kots")
+    order = relationship("Order", back_populates="kots", foreign_keys=[order_id])
 
 
 class ComboSuggestion(Base):
@@ -362,7 +282,7 @@ class VoiceSession(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(String(100), unique=True, nullable=False, index=True)
-    last_active = Column(Float, nullable=False)  # Unix timestamp
+    last_active = Column(DateTime, nullable=False)  # UTC timestamp
     order_items = Column(JSON, default=list)
     last_items = Column(JSON, default=list)
     turn_count = Column(Integer, default=0)
@@ -380,9 +300,15 @@ class VoiceSession(Base):
 
     @classmethod
     def from_dict(cls, d: dict) -> "VoiceSession":
+        from datetime import datetime, timezone
+        la = d.get("last_active")
+        if la is None:
+            la = datetime.now(timezone.utc)
+        elif isinstance(la, (int, float)):
+            la = datetime.fromtimestamp(la, tz=timezone.utc)
         return cls(
             session_id=d["session_id"],
-            last_active=d.get("last_active", 0.0),
+            last_active=la,
             order_items=d.get("order_items", []),
             last_items=d.get("last_items", []),
             turn_count=d.get("turn_count", 0),
@@ -400,13 +326,31 @@ class StockLog(Base):
     change_qty = Column(Float, nullable=False)  # positive = add, negative = deduct
     reason = Column(String(30), nullable=False)  # purchase | usage | waste | adjustment
     note = Column(Text, nullable=True)
-    staff_id = Column(Integer, ForeignKey("staff.id"), nullable=True)
     created_at = Column(DateTime, default=_utcnow)
 
     ingredient = relationship("Ingredient", back_populates="stock_logs")
-    staff = relationship("Staff", back_populates="stock_logs")
 
     __table_args__ = (
         CheckConstraint("reason IN ('purchase','usage','waste','adjustment')", name="ck_stocklog_reason"),
     )
 
+
+# ── v_sales (read-only view) ──────────────────────
+
+class VSale(Base):
+    """Read-only ORM model mapped to the v_sales view.
+    Replaces the old SaleTransaction table — no writes, zero duplication.
+    """
+
+    __tablename__ = "v_sales"
+    __table_args__ = {"info": {"is_view": True}}
+
+    id = Column(Integer, primary_key=True)
+    restaurant_id = Column(Integer)
+    item_id = Column(Integer)
+    order_id = Column(String(50))
+    quantity = Column(Integer)
+    unit_price = Column(Float)
+    total_price = Column(Float)
+    order_type = Column(String(20))
+    sold_at = Column(DateTime)

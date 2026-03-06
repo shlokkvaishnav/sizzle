@@ -1,4 +1,4 @@
-"""
+﻿"""
 advanced_analytics.py — Extended Analytical Capabilities
 =========================================================
 Covers deeper analytical needs:
@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct
 
 from models import (
-    MenuItem, SaleTransaction, Category, Order, OrderItem,
+    MenuItem, VSale, Category, Order, OrderItem,
     StockLog, Ingredient,
 )
 
@@ -244,7 +244,7 @@ def analyze_waste_and_voids(db: Session, days: int = 30) -> dict:
             func.sum(OrderItem.quantity).label("void_qty"),
         )
         .join(OrderItem, OrderItem.item_id == MenuItem.id)
-        .join(Order, Order.order_id == OrderItem.order_id)
+        .join(Order, Order.id == OrderItem.order_pk)
         .filter(
             Order.status == "cancelled",
             Order.created_at >= cutoff,
@@ -360,10 +360,10 @@ def calculate_menu_complexity(db: Session) -> list[dict]:
         item_sales = (
             db.query(
                 MenuItem.id.label("item_id"),
-                func.coalesce(func.sum(SaleTransaction.quantity), 0).label("qty"),
+                func.coalesce(func.sum(VSale.quantity), 0).label("qty"),
             )
             .select_from(MenuItem)
-            .outerjoin(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
+            .outerjoin(VSale, VSale.item_id == MenuItem.id)
             .filter(
                 MenuItem.category_id == cat_id,
                 MenuItem.is_available.is_(True),
@@ -495,11 +495,11 @@ def calculate_operational_metrics(db: Session, days: int = 30) -> dict:
 
 def _item_qty_in_range(db: Session, item_id: int, start: datetime, end: datetime) -> int:
     result = (
-        db.query(func.coalesce(func.sum(SaleTransaction.quantity), 0))
+        db.query(func.coalesce(func.sum(VSale.quantity), 0))
         .filter(
-            SaleTransaction.item_id == item_id,
-            SaleTransaction.sold_at >= start,
-            SaleTransaction.sold_at < end,
+            VSale.item_id == item_id,
+            VSale.sold_at >= start,
+            VSale.sold_at < end,
         )
         .scalar()
     )

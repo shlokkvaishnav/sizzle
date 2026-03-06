@@ -214,16 +214,20 @@ _ALIAS_MAX_PER_ITEM = 20         # max number of pipe-separated aliases
 _ALIAS_VALID_RE = re.compile(r"^[\w\s\-'.,()/&]+$", re.UNICODE)
 
 
-def validate_aliases(aliases: str | None) -> str:
+def validate_aliases(aliases) -> list[str]:
     """
-    Sanitize and validate a pipe-separated alias string.
+    Sanitize and validate aliases (list or pipe-separated string).
     Strips dangerous characters, truncates, deduplicates.
-    Returns the cleaned alias string.
+    Returns a cleaned list of alias strings.
     """
     if not aliases:
-        return ""
+        return []
 
-    parts = [a.strip() for a in aliases.split("|") if a.strip()]
+    # Handle both list (DB ARRAY) and legacy pipe-separated string
+    if isinstance(aliases, list):
+        parts = [str(a).strip() for a in aliases if a and str(a).strip()]
+    else:
+        parts = [a.strip() for a in str(aliases).split("|") if a.strip()]
     cleaned = []
     for part in parts[:_ALIAS_MAX_PER_ITEM]:
         if len(part) > 100:
@@ -232,10 +236,7 @@ def validate_aliases(aliases: str | None) -> str:
             cleaned.append(part)
         else:
             logger.warning("Rejected alias with invalid characters: %r", part[:50])
-    result = "|".join(cleaned)
-    if len(result) > _ALIAS_MAX_LENGTH:
-        result = result[:_ALIAS_MAX_LENGTH].rsplit("|", 1)[0]
-    return result
+    return cleaned
 
 
 def warmup_semantic_model():
@@ -267,8 +268,7 @@ def build_search_corpus(menu_items: list) -> dict:
         if item.name_hi:
             entries.append(item.name_hi.strip())
         if hasattr(item, "aliases") and item.aliases:
-            clean = validate_aliases(item.aliases)
-            for alias in clean.split("|"):
+            for alias in validate_aliases(item.aliases):
                 alias = alias.strip().lower()
                 if alias:
                     entries.append(alias)

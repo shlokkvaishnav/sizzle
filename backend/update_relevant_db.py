@@ -1,4 +1,4 @@
-"""
+﻿"""
 update_relevant_db.py
 =====================
 Safe database maintenance for analytics/ops correctness.
@@ -25,11 +25,9 @@ from models import (
     Restaurant,
     Category,
     MenuItem,
-    Staff,
-    Shift,
     Order,
     OrderItem,
-    SaleTransaction,
+    VSale,
     ComboSuggestion,
 )
 
@@ -37,11 +35,8 @@ from models import (
 TARGET_TABLES = [
     "categories",
     "menu_items",
-    "staff",
-    "shifts",
     "orders",
     "order_items",
-    "sale_transactions",
     "combo_suggestions",
 ]
 
@@ -64,8 +59,6 @@ def run_maintenance(db: Session, apply: bool = False) -> dict[str, int]:
         for model, label in (
             (Category, "categories_restaurant_id"),
             (MenuItem, "menu_items_restaurant_id"),
-            (Staff, "staff_restaurant_id"),
-            (Shift, "shifts_restaurant_id"),
             (Order, "orders_restaurant_id"),
             (ComboSuggestion, "combo_suggestions_restaurant_id"),
         ):
@@ -86,14 +79,14 @@ def run_maintenance(db: Session, apply: bool = False) -> dict[str, int]:
 
     # 3) Recompute order total_amount from order_items.
     sums = (
-        db.query(OrderItem.order_id, func.coalesce(func.sum(OrderItem.line_total), 0.0))
-        .group_by(OrderItem.order_id)
+        db.query(OrderItem.order_pk, func.coalesce(func.sum(OrderItem.line_total), 0.0))
+        .group_by(OrderItem.order_pk)
         .all()
     )
-    order_total_map = {order_id: float(total) for order_id, total in sums}
+    order_total_map = {order_pk: float(total) for order_pk, total in sums}
     orders = db.query(Order).all()
     for o in orders:
-        expected_total = order_total_map.get(o.order_id, 0.0)
+        expected_total = order_total_map.get(o.id, 0.0)
         if o.total_amount is None or abs((o.total_amount or 0.0) - expected_total) > 0.01:
             o.total_amount = expected_total
             stats["orders_total_amount"] += 1
@@ -108,7 +101,7 @@ def run_maintenance(db: Session, apply: bool = False) -> dict[str, int]:
         for mid, rid in db.query(MenuItem.id, MenuItem.restaurant_id).all()
     }
 
-    sales = db.query(SaleTransaction).all()
+    sales = db.query(VSale).all()
     for s in sales:
         if (s.unit_price or 0) <= 0 and s.item_id in menu_price_map:
             s.unit_price = menu_price_map[s.item_id]

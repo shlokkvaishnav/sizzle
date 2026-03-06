@@ -31,6 +31,8 @@ export default function Orders() {
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [orderPreview, setOrderPreview] = useState(null)
+  const [sortBy, setSortBy] = useState('created_at')
+  const [sortDir, setSortDir] = useState('desc')
   const limit = 20
 
   useEffect(() => {
@@ -139,12 +141,51 @@ export default function Orders() {
     }
   }
 
+  const { summary, orders: rawOrders, total } = data || {}
+  const totalPages = Math.max(1, Math.ceil((total || 0) / limit))
+
+  const handleSort = (col) => {
+    if (sortBy === col) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortBy(col)
+      setSortDir('asc')
+    }
+  }
+
+  const sortIndicator = (col) => {
+    if (sortBy !== col) return ''
+    return sortDir === 'asc' ? ' \u25B2' : ' \u25BC'
+  }
+
+  const orders = useMemo(() => {
+    if (!rawOrders) return []
+    const sorted = [...rawOrders]
+    sorted.sort((a, b) => {
+      let va = a[sortBy]
+      let vb = b[sortBy]
+      // Handle nulls
+      if (va == null) va = ''
+      if (vb == null) vb = ''
+      // Numeric columns
+      if (sortBy === 'total_amount') {
+        va = Number(va) || 0
+        vb = Number(vb) || 0
+      }
+      // String compare
+      if (typeof va === 'string') va = va.toLowerCase()
+      if (typeof vb === 'string') vb = vb.toLowerCase()
+      if (va < vb) return sortDir === 'asc' ? -1 : 1
+      if (va > vb) return sortDir === 'asc' ? 1 : -1
+      return 0
+    })
+    return sorted
+  }, [rawOrders, sortBy, sortDir])
+
+  const hasOrders = orders.length > 0
+
   if (loading) return <div className="loading">Loading orders...</div>
   if (!data) return <div className="loading">Failed to load orders.</div>
-
-  const { summary, orders, total } = data
-  const totalPages = Math.max(1, Math.ceil((total || 0) / limit))
-  const hasOrders = orders.length > 0
 
   return (
     <div className="app-page">
@@ -273,13 +314,13 @@ export default function Orders() {
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>Order ID</th>
-                      <th>Type</th>
-                      <th>Table</th>
-                      <th>Status</th>
-                      <th>Source</th>
-                      <th>Total</th>
-                      <th>Created</th>
+                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('order_number')}>Order ID{sortIndicator('order_number')}</th>
+                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('order_type')}>Type{sortIndicator('order_type')}</th>
+                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('table_number')}>Table{sortIndicator('table_number')}</th>
+                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('status')}>Status{sortIndicator('status')}</th>
+                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('source')}>Source{sortIndicator('source')}</th>
+                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('total_amount')}>Total{sortIndicator('total_amount')}</th>
+                      <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('created_at')}>Created{sortIndicator('created_at')}</th>
                       <th>Actions</th>
                     </tr>
                   </thead>

@@ -24,12 +24,11 @@ from models import (
     RestaurantTable,
     Ingredient,
     StockLog,
-    SaleTransaction,
+    VSale,
     MenuItem,
     Category,
     Restaurant,
     RestaurantSettings,
-    Staff,
 )
 from api.auth import require_role
 
@@ -89,7 +88,6 @@ class StockAdjustInput(BaseModel):
     change_qty: float
     reason: str = Field(..., pattern=r"^(purchase|usage|waste|adjustment)$")
     note: str | None = None
-    staff_id: int | None = None
 
 
 class IngredientUpdateInput(BaseModel):
@@ -106,20 +104,6 @@ class SettingsUpdateInput(BaseModel):
     billing_plan: dict | None = None
     security: dict | None = None
     voice_ai_config: dict | None = None
-
-
-class StaffCreateInput(BaseModel):
-    restaurant_id: int | None = None
-    name: str = Field(..., min_length=2, max_length=150)
-    role: str = Field(default="waiter", pattern=r"^(waiter|cashier|manager|chef)$")
-    pin: str = Field(..., pattern=r"^\d{4,6}$")
-    phone: str | None = None
-
-
-class StaffUpdateInput(BaseModel):
-    role: str | None = Field(default=None, pattern=r"^(waiter|cashier|manager|chef)$")
-    is_active: bool | None = None
-    phone: str | None = None
 
 
 DEFAULT_SETTINGS = {
@@ -318,7 +302,7 @@ def get_orders(
                 Order.created_at,
             )
             .filter(*filters)
-            .order_by(desc(Order.created_at))
+            .order_by(desc(Order.created_at), desc(Order.id))
             .offset(offset)
             .limit(limit)
             .all()
@@ -384,11 +368,17 @@ def get_order(order_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/orders")
-def create_order(body: OrderCreateInput, db: Session = Depends(get_db)):
+def create_order(
+    body: OrderCreateInput,
+    restaurant_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+):
     try:
+        rid = _resolve_restaurant_id(db, restaurant_id)
         order = Order(
             order_id=f"ORD-{uuid4().hex[:10].upper()}",
             order_number=_generate_order_number(db),
+            restaurant_id=rid,
             total_amount=body.total_amount,
             status=body.status,
             order_type=body.order_type,
@@ -541,7 +531,7 @@ def get_tables(
                             MenuItem.name,
                         )
                         .join(MenuItem, MenuItem.id == OrderItem.item_id)
-                        .filter(OrderItem.order_id == order.order_id)
+                        .filter(OrderItem.order_pk == order.id)
                         .all()
                     )
                     table_data["order"] = {
@@ -636,23 +626,20 @@ def book_table(
         order_id = f"ORD-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
         order_number = f"#{db.query(func.count(Order.id)).scalar() + 1}"
 
+        rid = _resolve_restaurant_id(db, restaurant_id)
         new_order = Order(
             order_id=order_id,
             order_number=order_number,
+            restaurant_id=rid,
             total_amount=0.0,
             status="building",
             order_type="dine_in",
             table_number=table.table_number,
+            table_id=table.id,
             source="manual",
         )
-        # Set optional FK columns only if they exist on the model
-        if restaurant_id is not None:
-            new_order.restaurant_id = restaurant_id
-        try:
-            new_order.table_id = table.id
-        except Exception:
-            pass
         db.add(new_order)
+        db.flush()  # ensure order row exists before FK reference
 
         table.status = "occupied"
         table.current_order_id = order_id
@@ -671,6 +658,7 @@ def book_table(
     except HTTPException:
         raise
     except Exception as e:
+        db.rollback()
         logger.exception("Error booking table")
         raise HTTPException(status_code=500, detail=f"Table booking failed: {e}")
 
@@ -705,22 +693,9 @@ def settle_table(
         order.updated_at = _utcnow_fn()
 
         # Recalculate total from order items
-        order_items = db.query(OrderItem).filter(OrderItem.order_id == order.order_id).all()
+        order_items = db.query(OrderItem).filter(OrderItem.order_pk == order.id).all()
         total = sum(oi.line_total for oi in order_items)
         order.total_amount = total
-
-        # Create sale_transactions for each order item (so analytics / orders page picks them up)
-        for oi in order_items:
-            sale = SaleTransaction(
-                item_id=oi.item_id,
-                order_id=order.order_id,
-                quantity=oi.quantity,
-                unit_price=oi.unit_price,
-                total_price=oi.line_total,
-                order_type=order.order_type or "dine_in",
-                shift_id=order.shift_id,
-            )
-            db.add(sale)
 
         # Free the table
         table.status = "empty"
@@ -809,6 +784,7 @@ def unreserve_table(
 @router.post("/tables/{table_id}/seat")
 def seat_reserved_table(
     table_id: int,
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -825,20 +801,20 @@ def seat_reserved_table(
         order_id = f"ORD-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
         order_number = f"#{db.query(func.count(Order.id)).scalar() + 1}"
 
+        rid = _resolve_restaurant_id(db, restaurant_id)
         new_order = Order(
             order_id=order_id,
             order_number=order_number,
+            restaurant_id=rid,
             total_amount=0.0,
             status="building",
             order_type="dine_in",
             table_number=table.table_number,
+            table_id=table.id,
             source="manual",
         )
-        try:
-            new_order.table_id = table.id
-        except Exception:
-            pass
         db.add(new_order)
+        db.flush()  # ensure order row exists before FK reference
 
         table.status = "occupied"
         table.current_order_id = order_id
@@ -854,6 +830,7 @@ def seat_reserved_table(
     except HTTPException:
         raise
     except Exception as e:
+        db.rollback()
         logger.exception("Error seating at table")
         raise HTTPException(status_code=500, detail=f"Table seat failed: {e}")
 
@@ -922,12 +899,17 @@ def add_item_to_table_order(
         if not item:
             raise HTTPException(status_code=404, detail="Menu item not found")
 
+        # Load the order for this table
+        order = db.query(Order).filter(Order.order_id == table.current_order_id).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found for this table")
+
         line_total = item.selling_price * quantity
 
         # Check if already in order — increment quantity
         existing = (
             db.query(OrderItem)
-            .filter(OrderItem.order_id == table.current_order_id, OrderItem.item_id == item_id)
+            .filter(OrderItem.order_pk == order.id, OrderItem.item_id == item_id)
             .first()
         )
         if existing:
@@ -935,7 +917,7 @@ def add_item_to_table_order(
             existing.line_total = existing.quantity * existing.unit_price
         else:
             oi = OrderItem(
-                order_id=table.current_order_id,
+                order_pk=order.id,
                 item_id=item_id,
                 quantity=quantity,
                 unit_price=item.selling_price,
@@ -944,17 +926,15 @@ def add_item_to_table_order(
             db.add(oi)
 
         # Update order total
-        order = db.query(Order).filter(Order.order_id == table.current_order_id).first()
-        if order:
-            all_items = db.query(func.coalesce(func.sum(OrderItem.line_total), 0.0)).filter(
-                OrderItem.order_id == order.order_id
-            ).scalar()
-            # Include the item we just added (if new, it's not committed yet — so add manually)
-            if not existing:
-                order.total_amount = float(all_items) + line_total
-            else:
-                # Recalculate since existing was updated
-                order.total_amount = float(all_items) + (item.selling_price * quantity)
+        all_items = db.query(func.coalesce(func.sum(OrderItem.line_total), 0.0)).filter(
+            OrderItem.order_pk == order.id
+        ).scalar()
+        # Include the item we just added (if new, it's not committed yet — so add manually)
+        if not existing:
+            order.total_amount = float(all_items) + line_total
+        else:
+            # Recalculate since existing was updated
+            order.total_amount = float(all_items) + (item.selling_price * quantity)
 
         db.commit()
 
@@ -1148,7 +1128,6 @@ def adjust_inventory(
             change_qty=body.change_qty,
             reason=body.reason,
             note=body.note,
-            staff_id=body.staff_id,
         )
         db.add(log)
         db.commit()
@@ -1227,14 +1206,14 @@ def get_reports(
 
         daily = (
             db.query(
-                func.date(SaleTransaction.sold_at).label("day"),
-                func.coalesce(func.sum(SaleTransaction.total_price), 0.0).label("revenue"),
-                func.coalesce(func.sum(SaleTransaction.quantity), 0).label("items"),
-                func.count(func.distinct(SaleTransaction.order_id)).label("orders"),
+                func.date(VSale.sold_at).label("day"),
+                func.coalesce(func.sum(VSale.total_price), 0.0).label("revenue"),
+                func.coalesce(func.sum(VSale.quantity), 0).label("items"),
+                func.count(func.distinct(VSale.order_id)).label("orders"),
             )
-            .filter(SaleTransaction.sold_at >= start_dt, SaleTransaction.sold_at <= end_dt)
-            .group_by(func.date(SaleTransaction.sold_at))
-            .order_by(func.date(SaleTransaction.sold_at).asc())
+            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt)
+            .group_by(func.date(VSale.sold_at))
+            .order_by(func.date(VSale.sold_at).asc())
             .all()
         )
 
@@ -1242,11 +1221,11 @@ def get_reports(
             db.query(
                 MenuItem.id,
                 MenuItem.name,
-                func.coalesce(func.sum(SaleTransaction.total_price), 0.0).label("revenue"),
-                func.coalesce(func.sum(SaleTransaction.quantity), 0).label("qty"),
+                func.coalesce(func.sum(VSale.total_price), 0.0).label("revenue"),
+                func.coalesce(func.sum(VSale.quantity), 0).label("qty"),
             )
-            .join(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
-            .filter(SaleTransaction.sold_at >= start_dt, SaleTransaction.sold_at <= end_dt)
+            .join(VSale, VSale.item_id == MenuItem.id)
+            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt)
             .group_by(MenuItem.id, MenuItem.name)
             .order_by(desc("revenue"))
             .limit(top_n)
@@ -1257,11 +1236,11 @@ def get_reports(
             db.query(
                 Category.id,
                 Category.name,
-                func.coalesce(func.sum(SaleTransaction.total_price), 0.0).label("revenue"),
+                func.coalesce(func.sum(VSale.total_price), 0.0).label("revenue"),
             )
             .join(MenuItem, MenuItem.category_id == Category.id)
-            .join(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
-            .filter(SaleTransaction.sold_at >= start_dt, SaleTransaction.sold_at <= end_dt)
+            .join(VSale, VSale.item_id == MenuItem.id)
+            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt)
             .group_by(Category.id, Category.name)
             .order_by(desc("revenue"))
             .limit(top_n)
@@ -1307,9 +1286,9 @@ def get_reports(
         combo_rows = db.query(MenuItem.id, MenuItem.name).all()
         menu_name_by_id = {item_id: name for item_id, name in combo_rows}
         combos = (
-            db.query(MenuItem.id, MenuItem.name, SaleTransaction.order_id)
-            .join(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
-            .filter(SaleTransaction.sold_at >= start_dt, SaleTransaction.sold_at <= end_dt)
+            db.query(MenuItem.id, MenuItem.name, VSale.order_id)
+            .join(VSale, VSale.item_id == MenuItem.id)
+            .filter(VSale.sold_at >= start_dt, VSale.sold_at <= end_dt)
             .all()
         )
         order_items_map = {}
@@ -1415,14 +1394,14 @@ def export_reports(
         if kind == "daily":
             rows = (
                 db.query(
-                    func.date(SaleTransaction.sold_at).label("day"),
-                    func.coalesce(func.sum(SaleTransaction.total_price), 0.0).label("revenue"),
-                    func.coalesce(func.sum(SaleTransaction.quantity), 0).label("items"),
-                    func.count(func.distinct(SaleTransaction.order_id)).label("orders"),
+                    func.date(VSale.sold_at).label("day"),
+                    func.coalesce(func.sum(VSale.total_price), 0.0).label("revenue"),
+                    func.coalesce(func.sum(VSale.quantity), 0).label("items"),
+                    func.count(func.distinct(VSale.order_id)).label("orders"),
                 )
-                .filter(SaleTransaction.sold_at >= cutoff)
-                .group_by(func.date(SaleTransaction.sold_at))
-                .order_by(func.date(SaleTransaction.sold_at).asc())
+                .filter(VSale.sold_at >= cutoff)
+                .group_by(func.date(VSale.sold_at))
+                .order_by(func.date(VSale.sold_at).asc())
                 .all()
             )
             writer.writerow(["date", "revenue", "orders", "items"])
@@ -1434,11 +1413,11 @@ def export_reports(
                 db.query(
                     MenuItem.id,
                     MenuItem.name,
-                    func.coalesce(func.sum(SaleTransaction.total_price), 0.0).label("revenue"),
-                    func.coalesce(func.sum(SaleTransaction.quantity), 0).label("qty"),
+                    func.coalesce(func.sum(VSale.total_price), 0.0).label("revenue"),
+                    func.coalesce(func.sum(VSale.quantity), 0).label("qty"),
                 )
-                .join(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
-                .filter(SaleTransaction.sold_at >= cutoff)
+                .join(VSale, VSale.item_id == MenuItem.id)
+                .filter(VSale.sold_at >= cutoff)
                 .group_by(MenuItem.id, MenuItem.name)
                 .order_by(desc("revenue"))
                 .limit(top_n)
@@ -1453,11 +1432,11 @@ def export_reports(
                 db.query(
                     Category.id,
                     Category.name,
-                    func.coalesce(func.sum(SaleTransaction.total_price), 0.0).label("revenue"),
+                    func.coalesce(func.sum(VSale.total_price), 0.0).label("revenue"),
                 )
                 .join(MenuItem, MenuItem.category_id == Category.id)
-                .join(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
-                .filter(SaleTransaction.sold_at >= cutoff)
+                .join(VSale, VSale.item_id == MenuItem.id)
+                .filter(VSale.sold_at >= cutoff)
                 .group_by(Category.id, Category.name)
                 .order_by(desc("revenue"))
                 .limit(top_n)
@@ -1493,12 +1472,6 @@ def get_settings(
             raise HTTPException(status_code=404, detail="Restaurant not found")
 
         settings = _get_or_create_settings(db, rid)
-        staff_rows = (
-            db.query(Staff.id, Staff.name, Staff.role, Staff.is_active)
-            .filter(Staff.restaurant_id == rid)
-            .order_by(Staff.name.asc())
-            .all()
-        )
 
         return {
             "restaurant_profile": {
@@ -1513,15 +1486,6 @@ def get_settings(
                 "gst_number": (settings.profile_extras or {}).get("gst_number", ""),
             },
             "menu_management": settings.menu_management or DEFAULT_SETTINGS["menu_management"],
-            "staff_roles": [
-                {
-                    "staff_id": row.id,
-                    "name": row.name,
-                    "role": row.role,
-                    "is_active": bool(row.is_active),
-                }
-                for row in staff_rows
-            ],
             "notifications": settings.notifications or DEFAULT_SETTINGS["notifications"],
             "integrations": settings.integrations or DEFAULT_SETTINGS["integrations"],
             "billing_plan": settings.billing_plan or DEFAULT_SETTINGS["billing_plan"],
@@ -1617,70 +1581,3 @@ def get_debug_settings():
     except Exception as e:
         logger.exception("Error fetching debug settings")
         raise HTTPException(status_code=500, detail=f"Debug settings fetch failed: {e}")
-
-
-@router.post("/settings/staff")
-def create_staff_member(
-    body: StaffCreateInput,
-    db: Session = Depends(get_db),
-):
-    try:
-        rid = _resolve_restaurant_id(db, body.restaurant_id)
-        pin_hash = hashlib.sha256(body.pin.encode()).hexdigest()
-        staff = Staff(
-            restaurant_id=rid,
-            name=body.name.strip(),
-            role=body.role,
-            pin_hash=pin_hash,
-            phone=body.phone,
-            is_active=True,
-        )
-        db.add(staff)
-        db.commit()
-        db.refresh(staff)
-        return {
-            "staff_id": staff.id,
-            "name": staff.name,
-            "role": staff.role,
-            "is_active": bool(staff.is_active),
-            "phone": staff.phone,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Error creating staff member")
-        raise HTTPException(status_code=500, detail=f"Staff creation failed: {e}")
-
-
-@router.patch("/settings/staff/{staff_id}")
-def update_staff_member(
-    staff_id: int,
-    body: StaffUpdateInput,
-    db: Session = Depends(get_db),
-):
-    try:
-        staff = db.query(Staff).filter(Staff.id == staff_id).first()
-        if not staff:
-            raise HTTPException(status_code=404, detail="Staff not found")
-
-        if body.role is not None:
-            staff.role = body.role
-        if body.is_active is not None:
-            staff.is_active = body.is_active
-        if body.phone is not None:
-            staff.phone = body.phone
-
-        db.commit()
-        db.refresh(staff)
-        return {
-            "staff_id": staff.id,
-            "name": staff.name,
-            "role": staff.role,
-            "is_active": bool(staff.is_active),
-            "phone": staff.phone,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Error updating staff member")
-        raise HTTPException(status_code=500, detail=f"Staff update failed: {e}")

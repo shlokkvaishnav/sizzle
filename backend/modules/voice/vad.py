@@ -98,8 +98,8 @@ def detect_speech_segments(wav_path: str) -> list[dict]:
     segments = []
     for ts in speech_timestamps:
         segments.append({
-            "start": ts["start"] / _SAMPLE_RATE,
-            "end": ts["end"] / _SAMPLE_RATE,
+            "start": float(ts["start"]) / _SAMPLE_RATE,
+            "end": float(ts["end"]) / _SAMPLE_RATE,
         })
 
     return segments
@@ -122,7 +122,7 @@ def extract_speech_audio(wav_path: str, output_path: str) -> dict:
     """
     segments = detect_speech_segments(wav_path)
     audio = _read_wav_as_tensor(wav_path)
-    total_audio_sec = len(audio) / _SAMPLE_RATE
+    total_audio_sec = float(len(audio)) / _SAMPLE_RATE
 
     if not segments:
         logger.warning("VAD found no speech in audio (%.1fs)", total_audio_sec)
@@ -130,7 +130,7 @@ def extract_speech_audio(wav_path: str, output_path: str) -> dict:
             "output_path": None,
             "speech_segments": [],
             "total_speech_sec": 0.0,
-            "total_audio_sec": total_audio_sec,
+            "total_audio_sec": round(total_audio_sec, 2),
             "speech_ratio": 0.0,
             "has_speech": False,
         }
@@ -143,7 +143,7 @@ def extract_speech_audio(wav_path: str, output_path: str) -> dict:
         speech_chunks.append(audio[start_sample:end_sample])
 
     speech_audio = torch.cat(speech_chunks)
-    total_speech_sec = len(speech_audio) / _SAMPLE_RATE
+    total_speech_sec = float(len(speech_audio)) / _SAMPLE_RATE
 
     has_speech = total_speech_sec >= MIN_TOTAL_SPEECH
 

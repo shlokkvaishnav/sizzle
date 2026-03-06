@@ -1,4 +1,4 @@
-"""
+﻿"""
 combo_engine.py — FP-Growth Combo Generator
 ==============================================
 Uses FP-Growth algorithm (via mlxtend) to discover
@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 from mlxtend.frequent_patterns import fpgrowth, association_rules
 
-from models import MenuItem, SaleTransaction, ComboSuggestion, Category
+from models import MenuItem, VSale, ComboSuggestion, Category
 
 # Thread-safe tracking of training state
 _train_lock = threading.Lock()
@@ -84,7 +84,7 @@ def generate_combos(
 
     # 1. Determine if we need to (re)train the ML model
     total_orders = (
-        db.query(func.count(func.distinct(SaleTransaction.order_id))).scalar() or 0
+        db.query(func.count(func.distinct(VSale.order_id))).scalar() or 0
     )
     existing_combos_count = db.query(ComboSuggestion).count()
 
@@ -201,10 +201,10 @@ def _run_ml_pipeline(
     # Step A: Get the most recent N distinct order IDs
     recent_order_ids_subquery = (
         db.query(
-            SaleTransaction.order_id,
-            func.max(SaleTransaction.sold_at).label("latest_sold_at"),
+            VSale.order_id,
+            func.max(VSale.sold_at).label("latest_sold_at"),
         )
-        .group_by(SaleTransaction.order_id)
+        .group_by(VSale.order_id)
         .order_by(desc("latest_sold_at"))
         .limit(window_size)
         .subquery()
@@ -213,18 +213,18 @@ def _run_ml_pipeline(
     # Step B: Get all transactions for these recent orders
     transactions_raw = (
         db.query(
-            SaleTransaction.order_id,
+            VSale.order_id,
             MenuItem.id,
             MenuItem.name,
             MenuItem.selling_price,
             MenuItem.food_cost,
             Category.name.label("category_name"),
         )
-        .join(MenuItem, SaleTransaction.item_id == MenuItem.id)
+        .join(MenuItem, VSale.item_id == MenuItem.id)
         .outerjoin(Category, MenuItem.category_id == Category.id)
         .join(
             recent_order_ids_subquery,
-            SaleTransaction.order_id == recent_order_ids_subquery.c.order_id,
+            VSale.order_id == recent_order_ids_subquery.c.order_id,
         )
         .all()
     )

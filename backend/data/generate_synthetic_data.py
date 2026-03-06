@@ -1,4 +1,4 @@
-"""
+﻿"""
 generate_synthetic_data.py — Supabase Synthetic Data Generator
 ================================================================
 Generates 60 menu items across 6 categories and 180 days of
@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database import engine, Base, SessionLocal
-from models import Category, MenuItem, SaleTransaction
+from models import Category, MenuItem, VSale
 
 
 # ── Helpers ──────────────────────────────────────
@@ -214,7 +214,7 @@ def seed_sales(db, items: list, num_days: int = 180, base_orders_per_day: int = 
                 qty = random.choices([1, 2, 3], weights=[0.70, 0.25, 0.05], k=1)[0]
                 unit_price = item.selling_price * random.uniform(0.95, 1.0)
 
-                sale = SaleTransaction(
+                sale = VSale(
                     item_id=item.id,
                     order_id=order_id,
                     quantity=qty,

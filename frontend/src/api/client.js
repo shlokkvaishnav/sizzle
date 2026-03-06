@@ -218,14 +218,15 @@ export const transcribeAudio = (audioBlob, sessionId, language = null) => {
   if (language) {
     form.append('language', language)
   }
-  return api.post('/voice/process-audio', form).then(r => r.data)
+  // Audio processing involves STT model inference + TTS — can take 30-60s on first call
+  return api.post('/voice/process-audio', form, { timeout: 120000 }).then(r => r.data)
 }
 
 export const submitTextOrder = (text, sessionId) =>
   post('/voice/process', { text, session_id: sessionId || null })
 
 export const confirmOrder = (order, kot) =>
-  post('/voice/confirm-order', { order, kot })
+  api.post('/voice/confirm-order', { order, kot }, { params: _params() }).then(r => r.data)
 
 export const speakText = (text, language = 'en') =>
   post('/voice/speak', { text, language })
@@ -240,7 +241,7 @@ export const getOpsOrder = (orderId) =>
   getWithCache(`/ops/orders/${orderId}`, { ttlMs: SHORT_CACHE_TTL_MS })
 
 export const createOpsOrder = (payload) =>
-  post('/ops/orders', payload).then((data) => {
+  api.post('/ops/orders', payload, { params: _params() }).then(r => r.data).then((data) => {
     invalidateCacheByPrefix('/ops/orders?')
     return data
   })
@@ -353,7 +354,7 @@ export const unreserveTable = async (tableId) => {
 
 export const seatReservedTable = async (tableId) => {
   try {
-    const data = await api.post(`/ops/tables/${tableId}/seat`).then(r => r.data)
+    const data = await api.post(`/ops/tables/${tableId}/seat`, {}, { params: _params() }).then(r => r.data)
     invalidateCacheByPrefix('/ops/tables')
     return data
   } catch (error) {

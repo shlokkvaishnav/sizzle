@@ -18,6 +18,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
+from datetime import datetime, timezone, timedelta
 from threading import Lock
 
 from .voice_config import cfg
@@ -196,7 +197,7 @@ class _DatabaseBackend(_SessionBackend):
                 VoiceSession.session_id == session_id
             ).first()
             if row:
-                row.last_active = time.time()
+                row.last_active = datetime.now(timezone.utc)
                 db.commit()
                 return row.to_dict()
             # Create new
@@ -230,13 +231,13 @@ class _DatabaseBackend(_SessionBackend):
                 VoiceSession.session_id == session["session_id"]
             ).first()
             if row:
-                row.last_active = time.time()
+                row.last_active = datetime.now(timezone.utc)
                 row.order_items = session.get("order_items", [])
                 row.last_items = session.get("last_items", [])
                 row.turn_count = session.get("turn_count", 0)
                 row.confirmed = session.get("confirmed", False)
             else:
-                session["last_active"] = time.time()
+                session["last_active"] = datetime.now(timezone.utc)
                 row = VoiceSession.from_dict(session)
                 db.add(row)
             db.commit()
@@ -275,7 +276,7 @@ class _DatabaseBackend(_SessionBackend):
 
     def _evict_expired(self, db):
         from models import VoiceSession
-        cutoff = time.time() - _SESSION_TIMEOUT
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=_SESSION_TIMEOUT)
         db.query(VoiceSession).filter(
             VoiceSession.last_active < cutoff
         ).delete()

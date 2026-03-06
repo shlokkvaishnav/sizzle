@@ -1,4 +1,4 @@
-"""
+﻿"""
 popularity.py — Sales Velocity & Popularity Scoring
 =====================================================
 Calculates how frequently each item is ordered,
@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
-from models import MenuItem, SaleTransaction
+from models import MenuItem, VSale
 
 
 def calculate_popularity(db: Session, days: int = 30, restaurant_id: int = None) -> list[dict]:
@@ -34,13 +34,13 @@ def calculate_popularity(db: Session, days: int = 30, restaurant_id: int = None)
     # Aggregate sales per item — filtered to recent window
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     sq = db.query(
-        SaleTransaction.item_id,
-        func.sum(SaleTransaction.quantity).label("total_qty"),
-        func.count(SaleTransaction.id).label("order_count"),
-    ).filter(SaleTransaction.sold_at >= cutoff)
+        VSale.item_id,
+        func.sum(VSale.quantity).label("total_qty"),
+        func.count(VSale.id).label("order_count"),
+    ).filter(VSale.sold_at >= cutoff)
     if restaurant_id:
-        sq = sq.filter(SaleTransaction.restaurant_id == restaurant_id)
-    sales_data = sq.group_by(SaleTransaction.item_id).all()
+        sq = sq.filter(VSale.restaurant_id == restaurant_id)
+    sales_data = sq.group_by(VSale.item_id).all()
 
     sales_map = {
         row.item_id: {

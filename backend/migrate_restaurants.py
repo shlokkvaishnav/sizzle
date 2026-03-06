@@ -1,4 +1,4 @@
-"""
+﻿"""
 migrate_restaurants.py
 ======================
 1. Creates the `restaurants` table
@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, ".")
 from sqlalchemy import text
 from database import engine, SessionLocal
-from models import Restaurant, Category, MenuItem, SaleTransaction
+from models import Restaurant, Category, MenuItem, VSale
 
 def sha256(pw: str) -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
@@ -286,7 +286,7 @@ db.commit()
 print("\n── Step 6: Generate Dragon Wok sales data ──")
 dragon_items = db.query(MenuItem).filter(MenuItem.restaurant_id == r2.id).all()
 
-if not db.query(SaleTransaction).filter(SaleTransaction.restaurant_id == r2.id).first():
+if not db.query(VSale).filter(VSale.restaurant_id == r2.id).first():
     now = datetime.now(timezone.utc)
     order_counter = 9000
     txns = []
@@ -303,7 +303,7 @@ if not db.query(SaleTransaction).filter(SaleTransaction.restaurant_id == r2.id).
 
             for item in items_in_order:
                 qty = random.randint(1, 3)
-                txns.append(SaleTransaction(
+                txns.append(VSale(
                     restaurant_id=r2.id,
                     item_id=item.id,
                     order_id=order_id,
@@ -326,8 +326,8 @@ else:
 # Summary
 r1_items = db.query(MenuItem).filter(MenuItem.restaurant_id == r1.id).count()
 r2_items = db.query(MenuItem).filter(MenuItem.restaurant_id == r2.id).count()
-r1_sales = db.query(SaleTransaction).filter(SaleTransaction.restaurant_id == r1.id).count()
-r2_sales = db.query(SaleTransaction).filter(SaleTransaction.restaurant_id == r2.id).count()
+r1_sales = db.query(VSale).filter(VSale.restaurant_id == r1.id).count()
+r2_sales = db.query(VSale).filter(VSale.restaurant_id == r2.id).count()
 
 print(f"""
 ╔══════════════════════════════════════════════════════╗

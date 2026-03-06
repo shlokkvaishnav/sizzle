@@ -1,4 +1,4 @@
-"""
+﻿"""
 routes_revenue.py — Revenue Intelligence API Endpoints
 ========================================================
 /api/revenue/* — Dashboard, menu matrix, hidden stars, risks,
@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from database import get_db
-from models import MenuItem, SaleTransaction, Category
+from models import MenuItem, VSale, Category
 from modules.revenue.analyzer import run_full_analysis
 from modules.revenue.analyzer import _calculate_health_score
 from modules.revenue.contribution_margin import calculate_margins
@@ -124,9 +124,9 @@ def get_dashboard(restaurant_id: int = Query(None), db: Session = Depends(get_db
             else 0
         )
 
-        rev_q = db.query(func.sum(SaleTransaction.total_price))
+        rev_q = db.query(func.sum(VSale.total_price))
         if restaurant_id:
-            rev_q = rev_q.filter(SaleTransaction.restaurant_id == restaurant_id)
+            rev_q = rev_q.filter(VSale.restaurant_id == restaurant_id)
         total_revenue = rev_q.scalar() or 0.0
 
         items_at_risk = sum(
@@ -347,13 +347,13 @@ def get_category_breakdown(
                     Category.name,
                     Category.name_hi,
                     func.count(func.distinct(MenuItem.id)).label("item_count"),
-                    func.coalesce(func.sum(SaleTransaction.total_price), 0).label("total_revenue"),
-                    func.coalesce(func.sum(SaleTransaction.quantity), 0).label("total_units"),
+                    func.coalesce(func.sum(VSale.total_price), 0).label("total_revenue"),
+                    func.coalesce(func.sum(VSale.quantity), 0).label("total_units"),
                     func.avg(MenuItem.selling_price - MenuItem.food_cost).label("avg_cm"),
                     func.avg(MenuItem.selling_price).label("avg_price"),
                 )
                 .join(MenuItem, MenuItem.category_id == Category.id)
-                .outerjoin(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
+                .outerjoin(VSale, VSale.item_id == MenuItem.id)
                 .filter(Category.is_active == True, MenuItem.is_available == True)
             )
             if restaurant_id:
