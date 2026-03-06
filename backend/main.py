@@ -174,6 +174,23 @@ def rebuild_faiss_index(db=Depends(get_db)):
     return {"status": "ok", "corpus_size": len(corpus), "menu_items": len(menu_items)}
 
 
+@app.post("/api/voice/reload-menu", tags=["Voice"], dependencies=[Depends(require_auth)])
+def reload_menu(db=Depends(get_db)):
+    """
+    Refresh menu items in the voice pipeline without rebuilding the FAISS index.
+    This updates the fuzzy corpus and in-memory menu references only.
+    """
+    from models import MenuItem
+
+    menu_items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
+    pipeline = getattr(app.state, "voice_pipeline", None)
+    if not pipeline:
+        return {"status": "error", "detail": "Voice pipeline not loaded"}
+
+    pipeline.refresh_menu(menu_items)
+    return {"status": "ok", "menu_items": len(menu_items), "corpus_size": len(pipeline.corpus)}
+
+
 @app.get("/api/health")
 def health():
     """Health check endpoint."""
