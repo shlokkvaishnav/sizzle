@@ -19,8 +19,9 @@ const statusStyles = {
 }
 
 function formatOrderRef(table) {
-  if (!table.current_order_id) return 'N/A'
-  const compact = String(table.current_order_id).replace(/-/g, '').toUpperCase()
+  const orderId = table.order?.order_id
+  if (!orderId) return 'N/A'
+  const compact = String(orderId).replace(/-/g, '').toUpperCase()
   return `#${compact.slice(0, 8)}`
 }
 

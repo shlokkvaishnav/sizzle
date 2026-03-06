@@ -228,12 +228,16 @@ export const transcribeAudio = (audioBlob, sessionId, language = null) => {
   if (language) {
     form.append('language', language)
   }
+  const rid = _rid()
+  if (rid) {
+    form.append('restaurant_id', String(rid))
+  }
   // Audio processing involves STT model inference + TTS — can take 30-60s on first call
   return api.post('/voice/process-audio', form, { timeout: API_AUDIO_TIMEOUT }).then(r => r.data)
 }
 
 export const submitTextOrder = (text, sessionId) =>
-  post('/voice/process', { text, session_id: sessionId || null })
+  post('/voice/process', { text, session_id: sessionId || null, restaurant_id: _rid() })
 
 export const confirmOrder = (order, kot) =>
   api.post('/voice/confirm-order', { order, kot }, { params: _params() }).then(r => r.data)
