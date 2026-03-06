@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { adjustInventory, getOpsInventoryFiltered, updateIngredient } from '../api/client'
 import { formatRupees } from '../utils/format'
 import { motion } from 'motion/react'
+import { INVENTORY_PAGE_LIMIT } from '../config'
 
 function formatDelta(current, previous) {
   const delta = (current || 0) - (previous || 0)
@@ -25,7 +26,7 @@ export default function Inventory() {
     reason: 'purchase',
     note: '',
   })
-  const limit = 25
+  const limit = INVENTORY_PAGE_LIMIT
 
   const params = useMemo(
     () => ({

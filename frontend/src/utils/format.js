@@ -1,26 +1,27 @@
-/** Indian number formatting utilities */
+/** Number formatting utilities — locale and currency configurable via env */
+import { NUMBER_LOCALE, CURRENCY_SYMBOL } from '../config'
 
-const inrFormatter = new Intl.NumberFormat('en-IN', {
+const numFormatter = new Intl.NumberFormat(NUMBER_LOCALE, {
   maximumFractionDigits: 0,
 })
 
-const inrDecimalFormatter = new Intl.NumberFormat('en-IN', {
+const numDecimalFormatter = new Intl.NumberFormat(NUMBER_LOCALE, {
   maximumFractionDigits: 2,
   minimumFractionDigits: 2,
 })
 
-/** Format rupee amount with ₹ prefix and Indian grouping: ₹1,00,000 */
+/** Format currency amount with symbol and locale grouping */
 export function formatRupees(value) {
-  if (value == null || isNaN(value)) return '₹0'
-  return `₹${inrFormatter.format(value)}`
+  if (value == null || isNaN(value)) return `${CURRENCY_SYMBOL}0`
+  return `${CURRENCY_SYMBOL}${numFormatter.format(value)}`
 }
 
-/** Format large rupee amounts: ₹1.2L, ₹45K etc. */
+/** Format large currency amounts: ₹1.2L, ₹45K etc. */
 export function formatRupeesShort(value) {
-  if (value == null || isNaN(value)) return '₹0'
-  if (value >= 100000) return `₹${(value / 100000).toFixed(1)}L`
-  if (value >= 1000) return `₹${(value / 1000).toFixed(1)}K`
-  return `₹${inrFormatter.format(value)}`
+  if (value == null || isNaN(value)) return `${CURRENCY_SYMBOL}0`
+  if (value >= 100000) return `${CURRENCY_SYMBOL}${(value / 100000).toFixed(1)}L`
+  if (value >= 1000) return `${CURRENCY_SYMBOL}${(value / 1000).toFixed(1)}K`
+  return `${CURRENCY_SYMBOL}${numFormatter.format(value)}`
 }
 
 /** Format percentage to 1 decimal max */

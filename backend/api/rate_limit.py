@@ -41,7 +41,7 @@ _REVENUE_RPM = _env_int("RATE_LIMIT_REVENUE_RPM", 200)
 _DEFAULT_RPM = _env_int("RATE_LIMIT_DEFAULT_RPM", 120)
 
 # Sliding window size in seconds
-_WINDOW = 60
+_WINDOW = _env_int("RATE_LIMIT_WINDOW_SEC", 60)
 
 
 class _RateLimiter:

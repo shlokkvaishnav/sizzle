@@ -40,7 +40,8 @@ def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int | No
 
 _JWT_SECRET = os.getenv("JWT_SECRET", "")
 _JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-_JWT_DEFAULT_EXPIRY_HOURS = _env_int("JWT_DEFAULT_EXPIRY_HOURS", 8, min_value=1, max_value=12)
+_JWT_MAX_EXPIRY_HOURS = _env_int("JWT_MAX_EXPIRY_HOURS", 12, min_value=1, max_value=72)
+_JWT_DEFAULT_EXPIRY_HOURS = _env_int("JWT_DEFAULT_EXPIRY_HOURS", 8, min_value=1, max_value=_JWT_MAX_EXPIRY_HOURS)
 
 # When True, all endpoints require a valid JWT.
 # Set to False (or unset) during development to keep current open behavior.
@@ -77,8 +78,8 @@ def create_token(staff_id: int, role: str, shift_end: datetime | None = None) ->
     else:
         exp = now + timedelta(hours=_JWT_DEFAULT_EXPIRY_HOURS)
 
-    # Hard cap at 12 hours regardless
-    max_exp = now + timedelta(hours=12)
+    # Hard cap regardless
+    max_exp = now + timedelta(hours=_JWT_MAX_EXPIRY_HOURS)
     if exp > max_exp:
         exp = max_exp
 

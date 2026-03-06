@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { cancelOpsOrder, createOpsOrder, getOpsOrder, getOpsOrders, updateOpsOrder } from '../api/client'
 import { formatRupees, formatRupeesShort } from '../utils/format'
 import { motion } from 'motion/react'
+import { ORDERS_PAGE_LIMIT } from '../config'
 
 const statusColors = {
   building: 'var(--warning)',
@@ -33,7 +34,7 @@ export default function Orders() {
   const [orderPreview, setOrderPreview] = useState(null)
   const [sortBy, setSortBy] = useState('created_at')
   const [sortDir, setSortDir] = useState('desc')
-  const limit = 20
+  const limit = ORDERS_PAGE_LIMIT
 
   useEffect(() => {
     const id = setTimeout(() => setDebouncedSearch(search.trim()), 300)

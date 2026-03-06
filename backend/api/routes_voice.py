@@ -8,6 +8,7 @@ order confirmation, order history, and WebSocket streaming.
 import asyncio
 import json
 import logging
+import os
 import tempfile
 from pathlib import Path
 
@@ -25,10 +26,10 @@ from modules.voice.voice_config import cfg
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.voice")
 
-# Max audio file size: 10 MB
-_MAX_AUDIO_SIZE = 10 * 1024 * 1024
+# Max audio file size (default 10 MB)
+_MAX_AUDIO_SIZE = int(os.getenv("MAX_AUDIO_SIZE_BYTES", str(10 * 1024 * 1024)))
 _ALLOWED_EXTENSIONS = {".wav", ".mp3", ".ogg", ".webm", ".m4a", ".flac"}
-_AUDIO_READ_CHUNK_SIZE = 1024 * 1024
+_AUDIO_READ_CHUNK_SIZE = int(os.getenv("AUDIO_READ_CHUNK_SIZE", str(1024 * 1024)))
 
 
 class TextInput(BaseModel):

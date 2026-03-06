@@ -9,11 +9,17 @@ Classifies menu items into the 4 BCG quadrants:
 """
 
 
+import os
+
+_DEFAULT_MARGIN_THRESHOLD = float(os.getenv("MENU_MATRIX_MARGIN_THRESHOLD", "60.0"))
+_DEFAULT_POPULARITY_THRESHOLD = float(os.getenv("MENU_MATRIX_POPULARITY_THRESHOLD", "0.4"))
+
+
 def classify_menu_matrix(
     margins: list[dict],
     popularity: list[dict],
-    margin_threshold: float = 60.0,
-    popularity_threshold: float = 0.4,
+    margin_threshold: float = _DEFAULT_MARGIN_THRESHOLD,
+    popularity_threshold: float = _DEFAULT_POPULARITY_THRESHOLD,
 ) -> list[dict]:
     """
     Classify items into BCG quadrants.

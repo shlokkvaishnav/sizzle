@@ -1,5 +1,5 @@
 /**
- * Centralized configuration for the frontend.
+ * Centralized configuration for the Sizzle frontend.
  * All values are overridable via VITE_* environment variables.
  */
 
