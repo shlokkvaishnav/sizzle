@@ -269,48 +269,48 @@ export default function Login() {
                                 ))}
                             </div>
                         </div>
-                </div>
+                    </motion.div>
 
-                {/* Footer */}
-                <motion.div
-                    className="login-footer-row"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ delay: 1, duration: 0.5 }}
-                >
-                    <div>© 2024-2026 Sizzle Inc.</div>
-                    <div className="login-footer-links">
-                        <a href="/contact" onClick={(e) => { e.preventDefault(); navigate('/contact') }}>Contact Us</a>
-                        <div className="login-lang-wrap">
-                            <button
-                                className="login-lang-btn"
-                                onClick={() => setLangOpen(!langOpen)}
-                            >
-                                {languages.find(l => l.code === language)?.label || 'English'}
-                                <svg
-                                    width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                                    style={{ transform: langOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
+                    {/* Footer */}
+                    <motion.div
+                        className="login-footer-row"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: 1, duration: 0.5 }}
+                    >
+                        <div>© 2024-2026 Sizzle Inc.</div>
+                        <div className="login-footer-links">
+                            <a href="/contact" onClick={(e) => { e.preventDefault(); navigate('/contact') }}>Contact Us</a>
+                            <div className="login-lang-wrap">
+                                <button
+                                    className="login-lang-btn"
+                                    onClick={() => setLangOpen(!langOpen)}
                                 >
-                                    <polyline points="6 9 12 15 18 9" />
-                                </svg>
-                            </button>
-                            {langOpen && (
-                                <div className="login-lang-dropdown">
-                                    {languages.map(l => (
-                                        <button
-                                            key={l.code}
-                                            className={`login-lang-option ${l.code === language ? 'active' : ''}`}
-                                            onClick={() => { setLanguage(l.code); setLangOpen(false) }}
-                                        >
-                                            {l.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
+                                    {languages.find(l => l.code === language)?.label || 'English'}
+                                    <svg
+                                        width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                                        style={{ transform: langOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
+                                    >
+                                        <polyline points="6 9 12 15 18 9" />
+                                    </svg>
+                                </button>
+                                {langOpen && (
+                                    <div className="login-lang-dropdown">
+                                        {languages.map(l => (
+                                            <button
+                                                key={l.code}
+                                                className={`login-lang-option ${l.code === language ? 'active' : ''}`}
+                                                onClick={() => { setLanguage(l.code); setLangOpen(false) }}
+                                            >
+                                                {l.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
                         </div>
-                    </div>
-                </motion.div>
-        </div>
+                    </motion.div>
+                </div>
             </motion.div >
         </div >
     )
