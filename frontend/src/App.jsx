@@ -12,6 +12,7 @@ import VoiceOrder from './pages/VoiceOrder'
 import AboutUs from './pages/AboutUs'
 import Product from './pages/Product'
 import Contact from './pages/Contact'
+import Signup from './pages/Signup'
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="/about" element={<AboutUs />} />
             <Route path="/product" element={<Product />} />
             <Route path="/contact" element={<Contact />} />
+            <Route path="/signup" element={<Signup />} />
             <Route path="/login" element={<Login />} />
 
             {/* Dashboard routes (after login) */}
