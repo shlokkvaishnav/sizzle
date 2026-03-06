@@ -74,19 +74,22 @@ export default function MenuAnalysis() {
 
   return (
     <motion.div
+      className="app-page"
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
     >
-      {/* Page header */}
       <motion.div
-        className="page-header"
-        initial={{ opacity: 0, x: -20 }}
-        animate={{ opacity: 1, x: 0 }}
+        className="app-hero"
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
       >
-        <h1 style={{ fontFamily: 'var(--font-display)' }}>Menu Intelligence</h1>
-        <p>BCG matrix classification with trend analysis</p>
+        <div>
+          <div className="app-hero-eyebrow">Intelligence</div>
+          <h1 className="app-hero-title">Menu Intelligence</h1>
+          <p className="app-hero-sub">BCG matrix classification with trend analysis.</p>
+        </div>
       </motion.div>
 
       {/* Quadrant stat pills */}

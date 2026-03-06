@@ -9,6 +9,11 @@ import Dashboard from './pages/Dashboard'
 import MenuAnalysis from './pages/MenuAnalysis'
 import ComboEngine from './pages/ComboEngine'
 import VoiceOrder from './pages/VoiceOrder'
+import Orders from './pages/Orders'
+import Tables from './pages/Tables'
+import Inventory from './pages/Inventory'
+import Reports from './pages/Reports'
+import Settings from './pages/Settings'
 import AboutUs from './pages/AboutUs'
 import Product from './pages/Product'
 import Contact from './pages/Contact'
@@ -41,6 +46,11 @@ export default function App() {
               <Route path="menu-analysis" element={<MenuAnalysis />} />
               <Route path="combos" element={<ComboEngine />} />
               <Route path="voice-order" element={<VoiceOrder />} />
+              <Route path="orders" element={<Orders />} />
+              <Route path="tables" element={<Tables />} />
+              <Route path="inventory" element={<Inventory />} />
+              <Route path="reports" element={<Reports />} />
+              <Route path="settings" element={<Settings />} />
             </Route>
           </Routes>
         </BrowserRouter>

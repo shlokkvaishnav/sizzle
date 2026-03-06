@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { motion } from 'motion/react'
-import { ChartBar, Target, LinkSimple, Microphone, SignOut } from '@phosphor-icons/react'
+import { ChartBar, Target, LinkSimple, Microphone, SignOut, ClipboardText, SquaresFour, Archive, ChartLine, Gear } from '@phosphor-icons/react'
 import { useAuth } from '../context/AuthContext'
 
 const navGroups = [
@@ -16,6 +16,16 @@ const navGroups = [
     items: [
       { to: '/dashboard/combos', icon: LinkSimple, label: 'Combo Engine' },
       { to: '/dashboard/voice-order', icon: Microphone, label: 'Voice Order' },
+      { to: '/dashboard/orders', icon: ClipboardText, label: 'Orders' },
+      { to: '/dashboard/tables', icon: SquaresFour, label: 'Tables' },
+      { to: '/dashboard/inventory', icon: Archive, label: 'Inventory' },
+      { to: '/dashboard/reports', icon: ChartLine, label: 'Reports' },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { to: '/dashboard/settings', icon: Gear, label: 'Settings' },
     ],
   },
 ]

@@ -33,23 +33,27 @@ export default function ComboEngine() {
     return <div className="loading"><div className="spinner" /> Mining combos and crunching prices...</div>
   }
 
-  const avgLift = combos.length > 0 ? (combos.reduce((s, c) => s + (parseFloat(c.lift) || 0), 0) / combos.length).toFixed(1) : '—'
-  const avgConf = combos.length > 0 ? (combos.reduce((s, c) => s + (c.confidence || 0), 0) / combos.length * 100).toFixed(0) : '—'
+  const avgLift = combos.length > 0 ? (combos.reduce((s, c) => s + (parseFloat(c.lift) || 0), 0) / combos.length).toFixed(1) : 'N/A'
+  const avgConf = combos.length > 0 ? (combos.reduce((s, c) => s + (c.confidence || 0), 0) / combos.length * 100).toFixed(0) : 'N/A'
 
   return (
     <motion.div
+      className="app-page"
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
     >
       <motion.div
-        className="page-header"
-        initial={{ opacity: 0, x: -20 }}
-        animate={{ opacity: 1, x: 0 }}
+        className="app-hero"
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
       >
-        <h1 style={{ fontFamily: 'var(--font-display)' }}>Combo Intelligence</h1>
-        <p>AI-generated combo recommendations & quadrant-based price strategies</p>
+        <div>
+          <div className="app-hero-eyebrow">Intelligence</div>
+          <h1 className="app-hero-title">Combo Intelligence</h1>
+          <p className="app-hero-sub">AI-generated combo recommendations and price strategies.</p>
+        </div>
       </motion.div>
 
       {/* Summary bar */}
