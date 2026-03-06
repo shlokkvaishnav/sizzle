@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import LightRays from '../components/LightRays'
+import { motion } from 'motion/react'
 import { useAuth } from '../context/AuthContext'
 import { useTranslation } from '../context/LanguageContext'
 import { loginApi } from '../api/client'
@@ -11,15 +12,24 @@ const DEMO_ACCOUNTS = [
     { label: 'Restaurant 2', name: 'Dragon Wok', cuisine: 'Chinese & Pan-Asian', email: 'admin@dragonwok.in', password: 'dragon123', emoji: '🐉' },
 ]
 
+const languages = [
+    { code: 'en', label: 'English' },
+    { code: 'hi', label: 'Hindi' },
+    { code: 'mr', label: 'Marathi' },
+    { code: 'kn', label: 'Kannada' },
+    { code: 'gu', label: 'Gujarati' },
+]
+
 export default function Login() {
     const navigate = useNavigate()
     const { login } = useAuth()
-    const { t } = useTranslation()
+    const { t, language, setLanguage } = useTranslation()
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [loading, setLoading] = useState(false)
     const [showPassword, setShowPassword] = useState(false)
     const [error, setError] = useState('')
+    const [langOpen, setLangOpen] = useState(false)
 
     const fillDemo = (account) => {
         setEmail(account.email)
@@ -49,10 +59,17 @@ export default function Login() {
 
     return (
         <div className="login-root">
-            <a href="#" className="login-back-btn" onClick={(e) => { e.preventDefault(); navigate('/'); }}>
+            <motion.a
+                href="#"
+                className="login-back-btn"
+                onClick={(e) => { e.preventDefault(); navigate('/'); }}
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.5, delay: 0.3 }}
+            >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5" /><path d="M12 19l-7-7 7-7" /></svg>
                 {t('login_back')}
-            </a>
+            </motion.a>
 
             {/* The interactive LightRays page background */}
             <div style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
@@ -90,14 +107,31 @@ export default function Login() {
                 </div>
             </div>
 
-            <div className="login-glass-card">
+            <motion.div
+                className="login-glass-card"
+                initial={{ opacity: 0, y: 40, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.7, ease: [0.25, 0.46, 0.45, 0.94] }}
+            >
                 {/* ─── LEFT SIDE ─── */}
                 <div className="login-side-left">
-                    <p className="login-left-subtitle">{t('login_left_sub')}</p>
-                    <h2 className="login-left-title">
+                    <motion.p
+                        className="login-left-subtitle"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.5, duration: 0.5 }}
+                    >
+                        {t('login_left_sub')}
+                    </motion.p>
+                    <motion.h2
+                        className="login-left-title"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.7, duration: 0.6 }}
+                    >
                         {t('login_left_title_1')}<br />
                         {t('login_left_title_2')}
-                    </h2>
+                    </motion.h2>
                 </div>
 
                 {/* ─── RIGHT SIDE ─── */}
@@ -108,7 +142,7 @@ export default function Login() {
                             <div className="login-logo-circle"></div>
                             <span className="login-logo-text">Sizzle</span>
                         </div>
-                        <a href="#" className="login-signup-btn">
+                        <a href="/signup" className="login-signup-btn" onClick={(e) => { e.preventDefault(); navigate('/signup') }}>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
                             </svg>
@@ -117,15 +151,37 @@ export default function Login() {
                     </div>
 
                     {/* Form Area */}
-                    <div className="login-form-area">
-                        <h1>{t('login_signin')}</h1>
+                    <motion.div
+                        className="login-form-area"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: 0.4, duration: 0.5 }}
+                    >
+                        <motion.h1
+                            initial={{ opacity: 0, y: 15 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.5, duration: 0.4 }}
+                        >
+                            {t('login_signin')}
+                        </motion.h1>
 
                         <form onSubmit={handleLogin}>
                             {error && (
-                                <div style={{ color: '#ff6b35', fontSize: '13px', marginBottom: '16px', fontWeight: 600 }}>{error}</div>
+                                <motion.div
+                                    style={{ color: '#ff6b35', fontSize: '13px', marginBottom: '16px', fontWeight: 600 }}
+                                    initial={{ opacity: 0, x: -10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                >
+                                    {error}
+                                </motion.div>
                             )}
 
-                            <div className="login-form-group">
+                            <motion.div
+                                className="login-form-group"
+                                initial={{ opacity: 0, y: 15 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.6, duration: 0.4 }}
+                            >
                                 <input
                                     type="text"
                                     className="login-input"
@@ -134,9 +190,14 @@ export default function Login() {
                                     onChange={(e) => setEmail(e.target.value)}
                                     autoComplete="username"
                                 />
-                            </div>
+                            </motion.div>
 
-                            <div className="login-form-group">
+                            <motion.div
+                                className="login-form-group"
+                                initial={{ opacity: 0, y: 15 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.7, duration: 0.4 }}
+                            >
                                 <input
                                     type={showPassword ? "text" : "password"}
                                     className="login-input"
@@ -157,14 +218,27 @@ export default function Login() {
                                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
                                     )}
                                 </button>
-                            </div>
+                            </motion.div>
 
-                            <a href="#" className="login-forgot-link">{t('login_forgot')}</a>
+                            <motion.a
+                                href="#"
+                                className="login-forgot-link"
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                transition={{ delay: 0.8, duration: 0.4 }}
+                            >
+                                {t('login_forgot')}
+                            </motion.a>
 
-                            <button
+                            <motion.button
                                 type="submit"
                                 className="login-submit-btn"
                                 disabled={loading}
+                                initial={{ opacity: 0, y: 15 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.9, duration: 0.4 }}
+                                whileHover={{ scale: 1.02, y: -2 }}
+                                whileTap={{ scale: 0.98 }}
                             >
                                 {loading ? t('login_signing_in') : (
                                     <>
@@ -172,7 +246,7 @@ export default function Login() {
                                         {t('login_submit')}
                                     </>
                                 )}
-                            </button>
+                            </motion.button>
                         </form>
 
                         {/* Demo Credentials for Hackathon */}
@@ -195,21 +269,49 @@ export default function Login() {
                                 ))}
                             </div>
                         </div>
-                    </div>
+                </div>
 
-                    {/* Footer */}
-                    <div className="login-footer-row">
-                        <div>© 2024-2026 Sizzle Inc.</div>
-                        <div className="login-footer-links">
-                            <a href="#">Contact Us</a>
-                            <a href="#" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                English
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
-                            </a>
+                {/* Footer */}
+                <motion.div
+                    className="login-footer-row"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 1, duration: 0.5 }}
+                >
+                    <div>© 2024-2026 Sizzle Inc.</div>
+                    <div className="login-footer-links">
+                        <a href="/contact" onClick={(e) => { e.preventDefault(); navigate('/contact') }}>Contact Us</a>
+                        <div className="login-lang-wrap">
+                            <button
+                                className="login-lang-btn"
+                                onClick={() => setLangOpen(!langOpen)}
+                            >
+                                {languages.find(l => l.code === language)?.label || 'English'}
+                                <svg
+                                    width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                                    style={{ transform: langOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
+                                >
+                                    <polyline points="6 9 12 15 18 9" />
+                                </svg>
+                            </button>
+                            {langOpen && (
+                                <div className="login-lang-dropdown">
+                                    {languages.map(l => (
+                                        <button
+                                            key={l.code}
+                                            className={`login-lang-option ${l.code === language ? 'active' : ''}`}
+                                            onClick={() => { setLanguage(l.code); setLangOpen(false) }}
+                                        >
+                                            {l.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     </div>
-                </div>
-            </div>
+                </motion.div>
         </div>
+            </motion.div >
+        </div >
     )
 }

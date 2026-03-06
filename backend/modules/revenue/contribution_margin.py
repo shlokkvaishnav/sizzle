@@ -30,22 +30,9 @@ def calculate_margins(db: Session, restaurant_id: int = None) -> list[dict]:
         }
     ]
     """
-    # Revenue per item via subquery to avoid GROUP BY issues with many columns
-    from sqlalchemy.orm import aliased
-    from sqlalchemy import select
-
-    rev_sq = (
-        db.query(
-            SaleTransaction.item_id,
-            func.coalesce(func.sum(SaleTransaction.total_price), 0).label("total_revenue"),
-        )
-        .group_by(SaleTransaction.item_id)
-        .subquery()
-    )
-
+    # Get items + category (no aggregates here)
     q = (
-        db.query(MenuItem, func.coalesce(rev_sq.c.total_revenue, 0))
-        .outerjoin(rev_sq, MenuItem.id == rev_sq.c.item_id)
+        db.query(MenuItem)
         .options(joinedload(MenuItem.category))
         .filter(MenuItem.is_available == True)
     )
@@ -53,8 +40,21 @@ def calculate_margins(db: Session, restaurant_id: int = None) -> list[dict]:
         q = q.filter(MenuItem.restaurant_id == restaurant_id)
     items = q.all()
 
+    # Revenue per item (aggregate in separate query to avoid GROUP BY issues)
+    rev_q = (
+        db.query(
+            SaleTransaction.item_id,
+            func.coalesce(func.sum(SaleTransaction.total_price), 0).label("total_revenue"),
+        )
+    )
+    if restaurant_id:
+        rev_q = rev_q.filter(SaleTransaction.item_id.in_([i.id for i in items]))
+    revenue_rows = rev_q.group_by(SaleTransaction.item_id).all()
+    revenue_map = {r.item_id: float(r.total_revenue or 0) for r in revenue_rows}
+
     results = []
-    for item, total_revenue in items:
+    for item in items:
+        total_revenue = revenue_map.get(item.id, 0.0)
         cm = item.selling_price - item.food_cost
         margin_pct = (cm / item.selling_price * 100) if item.selling_price > 0 else 0
 
