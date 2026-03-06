@@ -371,9 +371,48 @@ def _compute_segment_confidence(segments_list: list) -> tuple[str, float, list]:
     return transcript, round(overall_confidence, 3), segment_details
 
 
-def transcribe(audio_path: str) -> dict:
+# Per-language initial prompts — feed Whisper native-script priming so it
+# transcribes in the correct script instead of defaulting to Hindi/Latin.
+_LANGUAGE_PROMPTS = {
+    "gu": (
+        "gu-IN food order. "
+        "ek paneer tikka aur do butter naan. "
+        "ઓર્ડર: એક પનીર ટિક્કા, બે બટર નાન, ત્રણ ચા. "
+        "ઉમેરો, કાઢો, ઓર્ડર, ઓક."
+    ),
+    "mr": (
+        "mr-IN food order. "
+        "ek paneer tikka ani do butter naan. "
+        "ऑर्डर: एक पनीर टिक्का, दोन बटर नान, तीन चहा. "
+        "जोडा, काढा, ऑर्डर, ठीक आहे."
+    ),
+    "kn": (
+        "kn-IN food order. "
+        "ondu paneer tikka mattu eradu butter naan. "
+        "ಆರ್ಡರ್: ಒಂದು ಪನೀರ್ ಟಿಕ್ಕಾ, ಎರಡು ಬಟರ್ ನಾನ್, ಮೂರು ಚಹಾ. "
+        "ಸೇರಿಸಿ, ತೆಗೆಯಿರಿ, ಆರ್ಡರ್."
+    ),
+    "hi": (
+        "hi-IN food order. "
+        "ek paneer tikka aur do butter naan chahiye. "
+        "एक पनीर टिक्का, दो बटर नान, तीन चाय. "
+        "जोड़ें, हटाएं, ऑर्डर, ठीक है."
+    ),
+    "en": _INITIAL_PROMPT,  # reuse existing English prompt
+}
+
+
+def transcribe(audio_path: str, language_hint: str = None) -> dict:
     """
     Full STT pipeline: audio file → VAD preprocessing → Whisper → confidence check.
+
+    Args:
+        audio_path: Path to the audio file.
+        language_hint: ISO language code ('en','hi','gu','mr','kn') from a user-selected
+                       language preference. Used to override the final detected_language
+                       for TTS voice/template selection. Whisper still auto-detects so
+                       that the transcript stays in romanized/Latin script (which the
+                       pipeline's item matcher can process).
 
     Returns:
         {
@@ -420,14 +459,19 @@ def transcribe(audio_path: str) -> dict:
         vad_info = {"error": str(e), "has_speech": True}
 
     # Step 3: Whisper transcription on cleaned audio
+    # IMPORTANT: Always use language=None so Whisper auto-detects and outputs
+    # romanized/Latin-script text. If we pass language='gu'/'mr'/'kn', Whisper
+    # outputs native script (e.g. Gujarati) which the item matcher cannot match
+    # against English menu names. The language_hint is used ONLY for final
+    # detected_language override (TTS voice/template selection).
     model = _get_model()
     segments_gen, info = model.transcribe(
         transcribe_path,
         beam_size=cfg.STT_BEAM_SIZE,
-        language=None,                    # auto-detect language
+        language=None,                    # always auto-detect for romanized output
         task="transcribe",
         vad_filter=cfg.STT_VAD_FILTER,    # we already did VAD externally
-        initial_prompt=_INITIAL_PROMPT,   # bias toward correct food vocabulary
+        initial_prompt=_INITIAL_PROMPT,   # romanized food vocabulary
         condition_on_previous_text=cfg.STT_CONDITION_ON_PREV,
         temperature=cfg.STT_TEMPERATURE,  # deterministic — best for short commands
     )
@@ -455,9 +499,15 @@ def transcribe(audio_path: str) -> dict:
         _cleanup(transcribe_path)
 
     # Step 6: Text-based language re-detection
+    # If a language_hint was given, skip re-detection and trust the hint.
     whisper_lang = info.language
     whisper_conf = info.language_probability
-    final_lang = _redetect_language(transcript.strip(), whisper_lang, whisper_conf)
+    if language_hint and language_hint in ("en", "hi", "gu", "mr", "kn"):
+        final_lang = language_hint
+        logger.info("Language forced by hint: %s (Whisper guessed %s %.2f)",
+                    language_hint, whisper_lang, whisper_conf)
+    else:
+        final_lang = _redetect_language(transcript.strip(), whisper_lang, whisper_conf)
     if final_lang != whisper_lang:
         logger.info(
             "Language override: Whisper=%s (%.2f) → text-detected=%s | '%s'",

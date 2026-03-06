@@ -49,6 +49,246 @@ DEVANAGARI_MAP = {
 
 
 # ---------------------------------------------------------------------------
+# Gujarati script -> Romanized transliteration map (common restaurant words)
+# Unicode block: U+0A80 – U+0AFF
+# ---------------------------------------------------------------------------
+GUJARATI_MAP = {
+    # Numbers
+    "એક": "ek", "બે": "be", "ત્રણ": "tran", "ચાર": "char",
+    "પાંચ": "paanch", "છ": "chhe", "સાત": "saat", "આઠ": "aath",
+    "નવ": "nav", "દસ": "das",
+    # Common ordering words
+    "અને": "aur", "આપો": "de", "જોઈએ": "chahiye", "જોઇએ": "chahiye",
+    "કર": "kar", "કરો": "karo", "દો": "do", "આપ": "aap",
+    "હા": "haan", "ના": "nahi", "બસ": "bas", "ઓકે": "ok",
+    "ચાલે": "chale", "ચાલશે": "chalse", "પ્લીઝ": "please",
+    # Modifiers
+    "એક્સ્ટ્રા": "extra", "વગર": "bina", "વધારે": "zyada", "ઓછું": "kam",
+    # Common food words
+    "પનીર": "paneer", "ટિક્કા": "tikka", "ટિકા": "tikka",
+    "બટર": "butter", "નાન": "naan", "રોટી": "roti", "રોટલી": "roti",
+    "ચિકન": "chicken", "બિરયાની": "biryani", "દાળ": "dal", "દાલ": "dal",
+    "મસાલા": "masala", "લસ્સી": "lassi", "ચા": "chai", "ચાય": "chai",
+    "ગુલાબ": "gulab", "જામુન": "jamun", "મખની": "makhani",
+    "તંદૂરી": "tandoori", "પાલક": "palak", "શાહી": "shahi",
+    "મટન": "mutton", "આલુ": "aloo", "આલૂ": "aloo",
+    "ગોભી": "gobhi", "ગોબી": "gobhi", "ખીર": "kheer",
+    "કુલ્ફી": "kulfi", "કોલ્ડ": "cold", "પાણી": "pani",
+    "કબાબ": "kebab", "કેબાબ": "kebab", "રાયતા": "raita",
+    "સલાડ": "salad", "મશરૂમ": "mushroom", "રાઈસ": "rice",
+    # Gujarati-specific food
+    "થેપલા": "thepla", "ઢોકળા": "dhokla", "ખાખરા": "khakhra",
+    "ફાફડા": "fafda", "ઊંધિયું": "undhiyu", "જલેબી": "jalebi",
+    "ગાંઠિયા": "gathiya", "ખાંડવી": "khandvi",
+}
+
+# ---------------------------------------------------------------------------
+# Kannada script -> Romanized transliteration map (common restaurant words)
+# Unicode block: U+0C80 – U+0CFF
+# ---------------------------------------------------------------------------
+KANNADA_MAP = {
+    # Numbers
+    "ಒಂದು": "ondu", "ಎರಡು": "eradu", "ಮೂರು": "mooru",
+    "ನಾಲ್ಕು": "naalku", "ಐದು": "aidu",
+    # Common ordering words
+    "ಮತ್ತು": "mattu", "ಕೊಡಿ": "kodi", "ಬೇಕು": "beku",
+    "ಹಾಕಿ": "haaki", "ಸೇರಿಸಿ": "serisi",
+    "ಹೌದು": "houdu", "ಇಲ್ಲ": "illa", "ಸಾಕು": "saaku",
+    # Common food words
+    "ಪನೀರ್": "paneer", "ಪನೀರು": "paneer",
+    "ಟಿಕ್ಕಾ": "tikka", "ಬಟರ್": "butter", "ನಾನ್": "naan",
+    "ರೋಟಿ": "roti", "ಚಿಕನ್": "chicken", "ಚಿಕೆನ್": "chicken",
+    "ಬಿರಿಯಾನಿ": "biryani", "ದಾಲ್": "dal",
+    "ಮಸಾಲಾ": "masala", "ಲಸ್ಸಿ": "lassi", "ಚಹಾ": "chai",
+    "ಗುಲಾಬ್": "gulab", "ಜಾಮೂನ್": "jamun",
+    "ತಂದೂರಿ": "tandoori", "ಪಾಲಕ್": "palak",
+    "ಮಟನ್": "mutton", "ಆಲೂ": "aloo", "ಕಬಾಬ್": "kebab",
+    "ರೈಸ್": "rice", "ಅನ್ನ": "rice",
+}
+
+
+# ---------------------------------------------------------------------------
+# Character-level Gujarati -> Roman transliteration (fallback)
+# ---------------------------------------------------------------------------
+_GUJ_VOWELS_INDEP = {
+    '\u0A85': 'a', '\u0A86': 'aa', '\u0A87': 'i', '\u0A88': 'ee',
+    '\u0A89': 'u', '\u0A8A': 'oo', '\u0A8F': 'e', '\u0A90': 'ai',
+    '\u0A93': 'o', '\u0A94': 'au', '\u0A8B': 'ri',
+}
+_GUJ_MATRAS = {
+    '\u0ABE': 'a', '\u0ABF': 'i', '\u0AC0': 'ee', '\u0AC1': 'u',
+    '\u0AC2': 'oo', '\u0AC7': 'e', '\u0AC8': 'ai', '\u0ACB': 'o',
+    '\u0ACC': 'au', '\u0AC3': 'ri',
+}
+_GUJ_CONSONANTS = {
+    '\u0A95': 'k', '\u0A96': 'kh', '\u0A97': 'g', '\u0A98': 'gh', '\u0A99': 'ng',
+    '\u0A9A': 'ch', '\u0A9B': 'chh', '\u0A9C': 'j', '\u0A9D': 'jh', '\u0A9E': 'ny',
+    '\u0A9F': 't', '\u0AA0': 'th', '\u0AA1': 'd', '\u0AA2': 'dh', '\u0AA3': 'n',
+    '\u0AA4': 't', '\u0AA5': 'th', '\u0AA6': 'd', '\u0AA7': 'dh', '\u0AA8': 'n',
+    '\u0AAA': 'p', '\u0AAB': 'ph', '\u0AAC': 'b', '\u0AAD': 'bh', '\u0AAE': 'm',
+    '\u0AAF': 'y', '\u0AB0': 'r', '\u0AB2': 'l', '\u0AB5': 'v',
+    '\u0AB6': 'sh', '\u0AB7': 'sh', '\u0AB8': 's', '\u0AB9': 'h',
+}
+_GUJ_DIGITS = {
+    '\u0AE6': '0', '\u0AE7': '1', '\u0AE8': '2', '\u0AE9': '3', '\u0AEA': '4',
+    '\u0AEB': '5', '\u0AEC': '6', '\u0AED': '7', '\u0AEE': '8', '\u0AEF': '9',
+}
+_GUJ_HALANT = '\u0ACD'
+_GUJ_NUKTA = '\u0ABC'
+_GUJ_ANUSVARA = '\u0A82'
+_GUJ_VISARGA = '\u0A83'
+
+
+def _is_gujarati(c: str) -> bool:
+    return '\u0A80' <= c <= '\u0AFF'
+
+
+def _transliterate_remaining_gujarati(text: str) -> str:
+    """Character-by-character Gujarati -> Roman transliteration with schwa deletion."""
+    result = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if not _is_gujarati(c):
+            result.append(c)
+            i += 1
+            continue
+        if c in _GUJ_DIGITS:
+            result.append(_GUJ_DIGITS[c])
+            i += 1
+            continue
+        if i + 1 < n and text[i + 1] == _GUJ_NUKTA:
+            base = _GUJ_CONSONANTS.get(c, '')
+            i += 2
+        elif c in _GUJ_CONSONANTS:
+            base = _GUJ_CONSONANTS[c]
+            i += 1
+        elif c in _GUJ_VOWELS_INDEP:
+            result.append(_GUJ_VOWELS_INDEP[c])
+            i += 1
+            continue
+        elif c == _GUJ_ANUSVARA:
+            result.append('n')
+            i += 1
+            continue
+        elif c == _GUJ_VISARGA:
+            result.append('h')
+            i += 1
+            continue
+        else:
+            i += 1
+            continue
+        # Consonant post-processing
+        if i < n and text[i] == _GUJ_HALANT:
+            result.append(base)
+            i += 1
+        elif i < n and text[i] in _GUJ_MATRAS:
+            result.append(base + _GUJ_MATRAS[text[i]])
+            i += 1
+        else:
+            at_word_end = (i >= n or not _is_gujarati(text[i]))
+            result.append(base if at_word_end else base + 'a')
+    return ''.join(result)
+
+
+def _transliterate_gujarati(text: str) -> str:
+    """Two-pass Gujarati transliteration: word-level then character-level."""
+    for guj, roman in sorted(GUJARATI_MAP.items(), key=lambda x: len(x[0]), reverse=True):
+        text = text.replace(guj, roman)
+    text = _transliterate_remaining_gujarati(text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Character-level Kannada -> Roman transliteration (fallback)
+# ---------------------------------------------------------------------------
+_KAN_VOWELS_INDEP = {
+    '\u0C85': 'a', '\u0C86': 'aa', '\u0C87': 'i', '\u0C88': 'ee',
+    '\u0C89': 'u', '\u0C8A': 'oo', '\u0C8E': 'e', '\u0C8F': 'ee',
+    '\u0C90': 'ai', '\u0C92': 'o', '\u0C93': 'oo', '\u0C94': 'au',
+}
+_KAN_MATRAS = {
+    '\u0CBE': 'a', '\u0CBF': 'i', '\u0CC0': 'ee', '\u0CC1': 'u',
+    '\u0CC2': 'oo', '\u0CC6': 'e', '\u0CC7': 'ee', '\u0CC8': 'ai',
+    '\u0CCA': 'o', '\u0CCB': 'oo', '\u0CCC': 'au',
+}
+_KAN_CONSONANTS = {
+    '\u0C95': 'k', '\u0C96': 'kh', '\u0C97': 'g', '\u0C98': 'gh', '\u0C99': 'ng',
+    '\u0C9A': 'ch', '\u0C9B': 'chh', '\u0C9C': 'j', '\u0C9D': 'jh', '\u0C9E': 'ny',
+    '\u0C9F': 't', '\u0CA0': 'th', '\u0CA1': 'd', '\u0CA2': 'dh', '\u0CA3': 'n',
+    '\u0CA4': 't', '\u0CA5': 'th', '\u0CA6': 'd', '\u0CA7': 'dh', '\u0CA8': 'n',
+    '\u0CAA': 'p', '\u0CAB': 'ph', '\u0CAC': 'b', '\u0CAD': 'bh', '\u0CAE': 'm',
+    '\u0CAF': 'y', '\u0CB0': 'r', '\u0CB2': 'l', '\u0CB5': 'v',
+    '\u0CB6': 'sh', '\u0CB7': 'sh', '\u0CB8': 's', '\u0CB9': 'h',
+}
+_KAN_DIGITS = {
+    '\u0CE6': '0', '\u0CE7': '1', '\u0CE8': '2', '\u0CE9': '3', '\u0CEA': '4',
+    '\u0CEB': '5', '\u0CEC': '6', '\u0CED': '7', '\u0CEE': '8', '\u0CEF': '9',
+}
+_KAN_HALANT = '\u0CCD'
+_KAN_ANUSVARA = '\u0C82'
+_KAN_VISARGA = '\u0C83'
+
+
+def _is_kannada(c: str) -> bool:
+    return '\u0C80' <= c <= '\u0CFF'
+
+
+def _transliterate_remaining_kannada(text: str) -> str:
+    """Character-by-character Kannada -> Roman transliteration with schwa deletion."""
+    result = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if not _is_kannada(c):
+            result.append(c)
+            i += 1
+            continue
+        if c in _KAN_DIGITS:
+            result.append(_KAN_DIGITS[c])
+            i += 1
+            continue
+        if c in _KAN_CONSONANTS:
+            base = _KAN_CONSONANTS[c]
+            i += 1
+        elif c in _KAN_VOWELS_INDEP:
+            result.append(_KAN_VOWELS_INDEP[c])
+            i += 1
+            continue
+        elif c == _KAN_ANUSVARA:
+            result.append('n')
+            i += 1
+            continue
+        elif c == _KAN_VISARGA:
+            result.append('h')
+            i += 1
+            continue
+        else:
+            i += 1
+            continue
+        if i < n and text[i] == _KAN_HALANT:
+            result.append(base)
+            i += 1
+        elif i < n and text[i] in _KAN_MATRAS:
+            result.append(base + _KAN_MATRAS[text[i]])
+            i += 1
+        else:
+            at_word_end = (i >= n or not _is_kannada(text[i]))
+            result.append(base if at_word_end else base + 'a')
+    return ''.join(result)
+
+
+def _transliterate_kannada(text: str) -> str:
+    """Two-pass Kannada transliteration: word-level then character-level."""
+    for kan, roman in sorted(KANNADA_MAP.items(), key=lambda x: len(x[0]), reverse=True):
+        text = text.replace(kan, roman)
+    text = _transliterate_remaining_kannada(text)
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Character-level Devanagari → Roman transliteration
 # Fallback for words NOT covered by the word-level DEVANAGARI_MAP above.
 # Produces approximate romanizations that downstream fuzzy + semantic
@@ -299,12 +539,14 @@ def normalize(text: str) -> str:
     text = text.lower().strip()
 
     # Remove punctuation except spaces
-    # Preserve Devanagari (U+0900-097F) and Gujarati (U+0A80-0AFF) blocks
-    # so matras / vowel signs survive for transliteration
-    text = re.sub(r"[^\w\s\u0900-\u097F\u0A80-\u0AFF]", " ", text)
+    # Preserve Devanagari (U+0900-097F), Gujarati (U+0A80-0AFF),
+    # and Kannada (U+0C80-0CFF) blocks so matras/vowel signs survive
+    text = re.sub(r"[^\w\s\u0900-\u097F\u0A80-\u0AFF\u0C80-\u0CFF]", " ", text)
 
-    # Transliterate Devanagari -> romanized BEFORE number/filler processing
+    # Transliterate all Indic scripts -> romanized BEFORE number/filler processing
     text = _transliterate_devanagari(text)
+    text = _transliterate_gujarati(text)
+    text = _transliterate_kannada(text)
 
     # Apply phonetic corrections for Indian-accent STT mishearings
     # e.g. "chikan" → "chicken", "biriyani" → "biryani"

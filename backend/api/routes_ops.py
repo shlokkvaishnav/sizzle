@@ -16,10 +16,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
 from database import get_db
-from models import Order, RestaurantTable, Ingredient, StockLog, SaleTransaction, MenuItem, Category
+from models import Order, OrderItem, RestaurantTable, Ingredient, StockLog, SaleTransaction, MenuItem, Category
 
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.ops")
+
+
+def _utcnow_fn():
+    return datetime.now(timezone.utc)
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -34,6 +38,15 @@ def _parse_date(value: str | None) -> date | None:
 class TableUpdateInput(BaseModel):
     status: str = Field(..., pattern=r"^(empty|occupied|reserved|cleaning)$")
     current_order_id: str | None = None
+
+
+class TableBookInput(BaseModel):
+    guest_name: str | None = None
+    guest_count: int | None = None
+
+
+class TableSettleInput(BaseModel):
+    payment_method: str = Field("cash", pattern=r"^(cash|card|upi)$")
 
 
 class StockAdjustInput(BaseModel):
@@ -165,7 +178,7 @@ def get_tables(
     db: Session = Depends(get_db),
 ):
     """
-    Table status and reservation view.
+    Table status and reservation view — includes order details with items for occupied tables.
     """
     try:
         filters = []
@@ -185,6 +198,52 @@ def get_tables(
         )
         status_map = {s: c for s, c in status_counts}
 
+        result_tables = []
+        for t in tables:
+            table_data = {
+                "table_id": t.id,
+                "table_number": t.table_number,
+                "capacity": t.capacity,
+                "section": t.section,
+                "status": t.status,
+                "current_order_id": t.current_order_id,
+                "order": None,
+            }
+            # If occupied and has an order, load the order details with items
+            if t.current_order_id:
+                order = db.query(Order).filter(Order.order_id == t.current_order_id).first()
+                if order:
+                    items = (
+                        db.query(
+                            OrderItem.quantity,
+                            OrderItem.unit_price,
+                            OrderItem.line_total,
+                            MenuItem.name,
+                        )
+                        .join(MenuItem, MenuItem.id == OrderItem.item_id)
+                        .filter(OrderItem.order_id == order.order_id)
+                        .all()
+                    )
+                    table_data["order"] = {
+                        "order_id": order.order_id,
+                        "order_number": order.order_number,
+                        "total_amount": order.total_amount,
+                        "status": order.status,
+                        "order_type": order.order_type,
+                        "source": order.source,
+                        "created_at": order.created_at.isoformat() if order.created_at else None,
+                        "items": [
+                            {
+                                "name": item.name,
+                                "quantity": item.quantity,
+                                "unit_price": item.unit_price,
+                                "line_total": item.line_total,
+                            }
+                            for item in items
+                        ],
+                    }
+            result_tables.append(table_data)
+
         return {
             "summary": {
                 "total_tables": len(tables),
@@ -193,17 +252,7 @@ def get_tables(
                 "empty": int(status_map.get("empty", 0)),
                 "cleaning": int(status_map.get("cleaning", 0)),
             },
-            "tables": [
-                {
-                    "table_id": t.id,
-                    "table_number": t.table_number,
-                    "capacity": t.capacity,
-                    "section": t.section,
-                    "status": t.status,
-                    "current_order_id": t.current_order_id,
-                }
-                for t in tables
-            ],
+            "tables": result_tables,
         }
     except Exception as e:
         logger.exception("Error fetching tables")
@@ -240,6 +289,369 @@ def update_table(
     except Exception as e:
         logger.exception("Error updating table")
         raise HTTPException(status_code=500, detail=f"Table update failed: {e}")
+
+
+@router.post("/tables/{table_id}/book")
+def book_table(
+    table_id: int,
+    body: TableBookInput,
+    restaurant_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Book a free table — creates a new order for dine_in and marks table occupied.
+    """
+    try:
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).first()
+        if not table:
+            raise HTTPException(status_code=404, detail="Table not found")
+        if table.status != "empty":
+            raise HTTPException(status_code=400, detail=f"Table is currently {table.status}, cannot book")
+
+        # Generate unique order_id
+        import uuid
+        order_id = f"ORD-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+        order_number = f"#{db.query(func.count(Order.id)).scalar() + 1}"
+
+        new_order = Order(
+            order_id=order_id,
+            order_number=order_number,
+            total_amount=0.0,
+            status="building",
+            order_type="dine_in",
+            table_number=table.table_number,
+            source="manual",
+        )
+        # Set optional FK columns only if they exist on the model
+        if restaurant_id is not None:
+            new_order.restaurant_id = restaurant_id
+        try:
+            new_order.table_id = table.id
+        except Exception:
+            pass
+        db.add(new_order)
+
+        table.status = "occupied"
+        table.current_order_id = order_id
+
+        db.commit()
+        db.refresh(table)
+        db.refresh(new_order)
+
+        return {
+            "table_id": table.id,
+            "table_number": table.table_number,
+            "status": table.status,
+            "order_id": order_id,
+            "order_number": order_number,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error booking table")
+        raise HTTPException(status_code=500, detail=f"Table booking failed: {e}")
+
+
+@router.post("/tables/{table_id}/settle")
+def settle_table(
+    table_id: int,
+    body: TableSettleInput,
+    db: Session = Depends(get_db),
+):
+    """
+    Settle the bill for an occupied table:
+    1. Mark the order as 'confirmed'
+    2. Create sale_transactions for each order item
+    3. Free the table
+    """
+    try:
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).first()
+        if not table:
+            raise HTTPException(status_code=404, detail="Table not found")
+        if table.status != "occupied":
+            raise HTTPException(status_code=400, detail="Table is not occupied")
+        if not table.current_order_id:
+            raise HTTPException(status_code=400, detail="No order linked to this table")
+
+        order = db.query(Order).filter(Order.order_id == table.current_order_id).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        # Mark order as confirmed
+        order.status = "confirmed"
+        order.updated_at = _utcnow_fn()
+
+        # Recalculate total from order items
+        order_items = db.query(OrderItem).filter(OrderItem.order_id == order.order_id).all()
+        total = sum(oi.line_total for oi in order_items)
+        order.total_amount = total
+
+        # Create sale_transactions for each order item (so analytics / orders page picks them up)
+        for oi in order_items:
+            sale = SaleTransaction(
+                item_id=oi.item_id,
+                order_id=order.order_id,
+                quantity=oi.quantity,
+                unit_price=oi.unit_price,
+                total_price=oi.line_total,
+                order_type=order.order_type or "dine_in",
+                shift_id=order.shift_id,
+            )
+            db.add(sale)
+
+        # Free the table
+        table.status = "empty"
+        table.current_order_id = None
+
+        db.commit()
+
+        return {
+            "table_id": table.id,
+            "table_number": table.table_number,
+            "status": "empty",
+            "order_id": order.order_id,
+            "total_amount": round(total, 2),
+            "payment_method": body.payment_method,
+            "settled": True,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error settling table")
+        raise HTTPException(status_code=500, detail=f"Table settle failed: {e}")
+
+
+@router.post("/tables/{table_id}/reserve")
+def reserve_table(
+    table_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Reserve a free table.
+    """
+    try:
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).first()
+        if not table:
+            raise HTTPException(status_code=404, detail="Table not found")
+        if table.status != "empty":
+            raise HTTPException(status_code=400, detail=f"Table is currently {table.status}, cannot reserve")
+
+        table.status = "reserved"
+        db.commit()
+        db.refresh(table)
+
+        return {
+            "table_id": table.id,
+            "table_number": table.table_number,
+            "status": "reserved",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error reserving table")
+        raise HTTPException(status_code=500, detail=f"Table reserve failed: {e}")
+
+
+@router.post("/tables/{table_id}/unreserve")
+def unreserve_table(
+    table_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Remove reservation — set table back to empty.
+    """
+    try:
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).first()
+        if not table:
+            raise HTTPException(status_code=404, detail="Table not found")
+        if table.status != "reserved":
+            raise HTTPException(status_code=400, detail="Table is not reserved")
+
+        table.status = "empty"
+        db.commit()
+        db.refresh(table)
+
+        return {
+            "table_id": table.id,
+            "table_number": table.table_number,
+            "status": "empty",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error unreserving table")
+        raise HTTPException(status_code=500, detail=f"Table unreserve failed: {e}")
+
+
+@router.post("/tables/{table_id}/seat")
+def seat_reserved_table(
+    table_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Seat guests at a reserved table — creates order and marks occupied.
+    """
+    try:
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).first()
+        if not table:
+            raise HTTPException(status_code=404, detail="Table not found")
+        if table.status != "reserved":
+            raise HTTPException(status_code=400, detail="Table is not reserved")
+
+        import uuid
+        order_id = f"ORD-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+        order_number = f"#{db.query(func.count(Order.id)).scalar() + 1}"
+
+        new_order = Order(
+            order_id=order_id,
+            order_number=order_number,
+            total_amount=0.0,
+            status="building",
+            order_type="dine_in",
+            table_number=table.table_number,
+            source="manual",
+        )
+        try:
+            new_order.table_id = table.id
+        except Exception:
+            pass
+        db.add(new_order)
+
+        table.status = "occupied"
+        table.current_order_id = order_id
+
+        db.commit()
+
+        return {
+            "table_id": table.id,
+            "table_number": table.table_number,
+            "status": "occupied",
+            "order_id": order_id,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error seating at table")
+        raise HTTPException(status_code=500, detail=f"Table seat failed: {e}")
+
+
+@router.get("/menu-items")
+def get_menu_items_list(
+    search: str | None = None,
+    restaurant_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Return available menu items for adding to orders.
+    Filters by restaurant_id when provided so only that restaurant's items appear.
+    """
+    try:
+        filters = [MenuItem.is_available == True]
+        if restaurant_id is not None:
+            filters.append(MenuItem.restaurant_id == restaurant_id)
+        if search:
+            like = f"%{search.strip()}%"
+            filters.append(MenuItem.name.ilike(like))
+
+        items = (
+            db.query(MenuItem.id, MenuItem.name, MenuItem.selling_price, MenuItem.is_veg, Category.name.label("category"))
+            .outerjoin(Category, Category.id == MenuItem.category_id)
+            .filter(*filters)
+            .order_by(MenuItem.name.asc())
+            .limit(100)
+            .all()
+        )
+        return {
+            "items": [
+                {
+                    "id": i.id,
+                    "name": i.name,
+                    "price": i.selling_price,
+                    "is_veg": i.is_veg,
+                    "category": i.category or "Uncategorized",
+                }
+                for i in items
+            ],
+        }
+    except Exception as e:
+        logger.exception("Error fetching menu items")
+        raise HTTPException(status_code=500, detail=f"Menu items fetch failed: {e}")
+
+
+@router.post("/tables/{table_id}/add-item")
+def add_item_to_table_order(
+    table_id: int,
+    item_id: int = Query(...),
+    quantity: int = Query(1, ge=1),
+    db: Session = Depends(get_db),
+):
+    """
+    Add a menu item to the order on a given table. Creates order item and updates order total.
+    """
+    try:
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).first()
+        if not table:
+            raise HTTPException(status_code=404, detail="Table not found")
+        if table.status != "occupied" or not table.current_order_id:
+            raise HTTPException(status_code=400, detail="Table has no active order")
+
+        item = db.query(MenuItem).filter(MenuItem.id == item_id).first()
+        if not item:
+            raise HTTPException(status_code=404, detail="Menu item not found")
+
+        line_total = item.selling_price * quantity
+
+        # Check if already in order — increment quantity
+        existing = (
+            db.query(OrderItem)
+            .filter(OrderItem.order_id == table.current_order_id, OrderItem.item_id == item_id)
+            .first()
+        )
+        if existing:
+            existing.quantity += quantity
+            existing.line_total = existing.quantity * existing.unit_price
+        else:
+            oi = OrderItem(
+                order_id=table.current_order_id,
+                item_id=item_id,
+                quantity=quantity,
+                unit_price=item.selling_price,
+                line_total=line_total,
+            )
+            db.add(oi)
+
+        # Update order total
+        order = db.query(Order).filter(Order.order_id == table.current_order_id).first()
+        if order:
+            all_items = db.query(func.coalesce(func.sum(OrderItem.line_total), 0.0)).filter(
+                OrderItem.order_id == order.order_id
+            ).scalar()
+            # Include the item we just added (if new, it's not committed yet — so add manually)
+            if not existing:
+                order.total_amount = float(all_items) + line_total
+            else:
+                # Recalculate since existing was updated
+                order.total_amount = float(all_items) + (item.selling_price * quantity)
+
+        db.commit()
+
+        # Re-query for accurate total
+        if order:
+            db.refresh(order)
+
+        return {
+            "table_id": table.id,
+            "order_id": table.current_order_id,
+            "item_name": item.name,
+            "quantity": quantity,
+            "line_total": line_total,
+            "order_total": order.total_amount if order else 0,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error adding item to table order")
+        raise HTTPException(status_code=500, detail=f"Add item failed: {e}")
 
 
 @router.get("/inventory")

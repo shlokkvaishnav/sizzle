@@ -92,13 +92,16 @@ export const getOperationalMetrics = (days = 30) =>
 
 // ── Voice Ordering ──
 
-export const transcribeAudio = (audioBlob, sessionId) => {
+export const transcribeAudio = (audioBlob, sessionId, language = null) => {
   const form = new FormData()
   if (audioBlob) {
     form.append('audio', audioBlob, 'recording.webm')
   }
   if (sessionId) {
     form.append('session_id', sessionId)
+  }
+  if (language) {
+    form.append('language', language)
   }
   return api.post('/voice/process-audio', form).then(r => r.data)
 }
@@ -146,6 +149,27 @@ export const getOpsSettings = () =>
 
 export const updateTableStatus = (tableId, payload) =>
   api.patch(`/ops/tables/${tableId}`, payload).then(r => r.data)
+
+export const bookTable = (tableId, payload = {}) =>
+  api.post(`/ops/tables/${tableId}/book`, payload, { params: _params() }).then(r => r.data)
+
+export const settleTable = (tableId, payload = {}) =>
+  api.post(`/ops/tables/${tableId}/settle`, payload).then(r => r.data)
+
+export const reserveTable = (tableId) =>
+  api.post(`/ops/tables/${tableId}/reserve`).then(r => r.data)
+
+export const unreserveTable = (tableId) =>
+  api.post(`/ops/tables/${tableId}/unreserve`).then(r => r.data)
+
+export const seatReservedTable = (tableId) =>
+  api.post(`/ops/tables/${tableId}/seat`).then(r => r.data)
+
+export const getMenuItemsList = (search = '') =>
+  api.get('/ops/menu-items', { params: _params({ search: search || undefined }) }).then(r => r.data)
+
+export const addItemToTableOrder = (tableId, itemId, quantity = 1) =>
+  api.post(`/ops/tables/${tableId}/add-item`, null, { params: { item_id: itemId, quantity } }).then(r => r.data)
 
 export const adjustInventory = (payload) =>
   api.post('/ops/inventory/adjust', payload).then(r => r.data)

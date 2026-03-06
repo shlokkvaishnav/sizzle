@@ -20,6 +20,7 @@ export default function VoiceOrder() {
   const [actionFeedback, setActionFeedback] = useState(null) // {type, message}
   const [confirmedOrders, setConfirmedOrders] = useState([]) // Array of confirmed order snapshots
   const [autoListenEnabled, setAutoListenEnabled] = useState(true)
+  const [selectedLanguage, setSelectedLanguage] = useState('auto') // 'auto'|'en'|'hi'|'gu'|'mr'|'kn'
   const sessionId = useRef(generateSessionId())
   const currentAudioRef = useRef(null)
   const recorderRef = useRef(null)
@@ -129,7 +130,8 @@ export default function VoiceOrder() {
     setLoading(true)
     setError(null)
     try {
-      const data = await transcribeAudio(audioBlob, sessionId.current)
+      const langToSend = selectedLanguage !== 'auto' ? selectedLanguage : null
+      const data = await transcribeAudio(audioBlob, sessionId.current, langToSend)
       processResult(data)
     } catch (err) {
       const status = err.response?.status
@@ -316,6 +318,37 @@ export default function VoiceOrder() {
             <div className="card-header">
               Voice Input
               {hasCart && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}> — say "remove", "add", or "confirm"</span>}
+            </div>
+            {/* Language selector */}
+            <div style={{ display: 'flex', gap: 4, padding: '8px 16px 0', flexWrap: 'wrap' }}>
+              {[
+                { code: 'auto', label: 'Auto' },
+                { code: 'en',   label: 'EN' },
+                { code: 'hi',   label: 'हिं' },
+                { code: 'gu',   label: 'ગુ' },
+                { code: 'mr',   label: 'मर' },
+                { code: 'kn',   label: 'ಕನ' },
+              ].map(({ code, label }) => (
+                <button
+                  key={code}
+                  onClick={() => setSelectedLanguage(code)}
+                  style={{
+                    padding: '3px 10px', borderRadius: 'var(--radius-full)', fontSize: 11, fontWeight: 600,
+                    cursor: 'pointer', border: '1px solid',
+                    borderColor: selectedLanguage === code ? 'var(--accent)' : 'var(--border-subtle)',
+                    background: selectedLanguage === code
+                      ? 'color-mix(in srgb, var(--accent) 15%, transparent)'
+                      : 'var(--bg-elevated)',
+                    color: selectedLanguage === code ? 'var(--accent)' : 'var(--text-muted)',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', alignSelf: 'center', marginLeft: 4 }}>
+                {selectedLanguage === 'auto' ? 'auto-detect' : 'language locked'}
+              </span>
             </div>
             <div className="card-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 32 }}>
               <VoiceRecorder

@@ -83,10 +83,11 @@ class VoicePipeline:
                                   detected_language=lang,
                                   session_id=session_id)
 
-    def process_audio(self, audio_path: str, session_id: str = None) -> dict:
+    def process_audio(self, audio_path: str, session_id: str = None,
+                      language_hint: str = None) -> dict:
         """Full pipeline: audio file -> structured order JSON."""
         try:
-            stt_result = transcribe(audio_path)
+            stt_result = transcribe(audio_path, language_hint=language_hint)
         except FileNotFoundError:
             sr = errs.stt_model_error("ffmpeg not found")
             return self._error_response(sr, session_id=session_id)
@@ -95,7 +96,8 @@ class VoicePipeline:
             return self._error_response(sr, session_id=session_id)
 
         # Apply session language stickiness: re-detect with session hint
-        if session_id:
+        # Skip if user explicitly chose a language — the hint already locked it in STT.
+        if session_id and not language_hint:
             session_lang = get_session_language(session_id)
             if session_lang:
                 transcript = stt_result.get("transcript", "").strip()

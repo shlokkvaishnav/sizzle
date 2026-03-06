@@ -36,10 +36,43 @@ _ALLOWED_ORIGINS = os.getenv(
 ).split(",")
 
 
+def _run_auto_migrations(eng):
+    """Add any columns defined in ORM models but missing from the live DB.
+    Safe to run repeatedly — uses ADD COLUMN IF NOT EXISTS (Postgres)
+    or tries/catches for SQLite."""
+    from sqlalchemy import inspect as sa_inspect, text
+    inspector = sa_inspect(eng)
+    is_pg = "postgres" in str(eng.url)
+    for table in Base.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue  # create_all will handle new tables
+        existing_cols = {c["name"] for c in inspector.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in existing_cols:
+                continue
+            col_type = col.type.compile(eng.dialect)
+            nullable = "" if col.nullable else " NOT NULL"
+            default = ""
+            if col.default is not None and col.default.arg is not None and isinstance(col.default.arg, (str, int, float, bool)):
+                default = f" DEFAULT {repr(col.default.arg)}"
+            if is_pg:
+                stmt = f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS "{col.name}" {col_type}{nullable}{default}'
+            else:
+                stmt = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col_type}{default}'
+            try:
+                with eng.begin() as conn:
+                    conn.execute(text(stmt))
+                logger.info("Migration: added column %s.%s", table.name, col.name)
+            except Exception as exc:
+                # Column may already exist (SQLite has no IF NOT EXISTS for columns)
+                logger.debug("Column %s.%s skipped: %s", table.name, col.name, exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create DB tables and load VoicePipeline with menu data from DB."""
     Base.metadata.create_all(bind=engine)
+    _run_auto_migrations(engine)
     logger.info("Petpooja AI Copilot — Server ready")
     logger.info("Revenue engine loaded")
 

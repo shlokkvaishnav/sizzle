@@ -136,6 +136,7 @@ async def transcribe_audio(
 async def process_audio(
     audio: UploadFile = File(...),
     session_id: str = Form(None),
+    language: str = Form(None),
     pipeline=Depends(get_voice_pipeline),
 ):
     """
@@ -144,7 +145,8 @@ async def process_audio(
     """
     audio_path = await _save_audio_temp(audio)
     try:
-        result = pipeline.process_audio(audio_path, session_id=session_id)
+        result = pipeline.process_audio(audio_path, session_id=session_id,
+                                        language_hint=language or None)
 
         # TTS enhancement — non-blocking, degrades gracefully on failure
         tts_result = {"audio_b64": None, "spoken_text": None, "language": result.get("detected_language", "en")}
