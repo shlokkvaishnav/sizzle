@@ -457,6 +457,18 @@ export default function WebCall() {
     lastKnownOrderRef.current = null
     sessionId.current = generateSessionId()
 
+    // Stop any previous audio and cancel deferred TTS so only the agent (opening prompt) speaks
+    stopAudio()
+    if (ttsTextFallbackTimerRef.current) {
+      clearTimeout(ttsTextFallbackTimerRef.current)
+      ttsTextFallbackTimerRef.current = null
+    }
+    if (ttsChunkTimeoutRef.current) {
+      clearTimeout(ttsChunkTimeoutRef.current)
+      ttsChunkTimeoutRef.current = null
+    }
+    ttsChunkBufferRef.current = []
+
     const connected = await connect()
     if (!connected) {
       setStatus('idle')
@@ -469,7 +481,7 @@ export default function WebCall() {
     lastIntentRef.current = 'GREETING'
     setStatus('active')
     await speakAgentPrompt(OPENING_PROMPTS[activeLanguage], activeLanguage)
-  }, [activeLanguage, connect, speakAgentPrompt])
+  }, [activeLanguage, connect, speakAgentPrompt, stopAudio])
 
   const endCall = useCallback(() => {
     callActiveRef.current = false
@@ -478,6 +490,16 @@ export default function WebCall() {
     setMicPaused(false)
     setStatus('ended')
     recorderRef.current?.stopRecording()
+    // Cancel any deferred TTS so they don't play after we start the next call
+    if (ttsTextFallbackTimerRef.current) {
+      clearTimeout(ttsTextFallbackTimerRef.current)
+      ttsTextFallbackTimerRef.current = null
+    }
+    if (ttsChunkTimeoutRef.current) {
+      clearTimeout(ttsChunkTimeoutRef.current)
+      ttsChunkTimeoutRef.current = null
+    }
+    ttsChunkBufferRef.current = []
     handleInterruptAudio()
     disconnect()
     setQuickOptions([])   // clear option buttons on hang-up

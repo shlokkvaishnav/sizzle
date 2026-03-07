@@ -22,6 +22,17 @@ export function stopBrowserSpeech() {
   window.speechSynthesis.cancel()
 }
 
+/** Prefer a female voice for the agent (lady) when using browser TTS fallback. */
+function getAgentVoice(langTag) {
+  if (typeof window === 'undefined' || !window.speechSynthesis) return null
+  const voices = window.speechSynthesis.getVoices()
+  const want = (langTag || 'en-IN').toLowerCase()
+  const female = voices.filter((v) => v.lang.toLowerCase().startsWith(want.split('-')[0]) && v.name.toLowerCase().includes('female'))
+  if (female.length > 0) return female[0]
+  const byLang = voices.filter((v) => v.lang.toLowerCase().startsWith(want.split('-')[0]))
+  return byLang.length > 0 ? byLang[0] : null
+}
+
 export function speakWithBrowserTTS(text, language, { onStart, onEnd, onError } = {}) {
   if (typeof window === 'undefined' || !window.speechSynthesis || !text?.trim()) {
     onError?.()
@@ -30,8 +41,11 @@ export function speakWithBrowserTTS(text, language, { onStart, onEnd, onError } 
 
   stopBrowserSpeech()
 
+  const langTag = LANGUAGE_MAP[language] || LANGUAGE_MAP.en
   const utterance = new SpeechSynthesisUtterance(text)
-  utterance.lang = LANGUAGE_MAP[language] || LANGUAGE_MAP.en
+  utterance.lang = langTag
+  const voice = getAgentVoice(langTag)
+  if (voice) utterance.voice = voice
   utterance.onstart = () => onStart?.()
   utterance.onend = () => onEnd?.()
   utterance.onerror = () => onError?.()
