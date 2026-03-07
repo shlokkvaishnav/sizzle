@@ -63,32 +63,97 @@ def _find_ffmpeg() -> str:
 
 # Lazy-loaded model — loaded on first transcribe() call or at startup via warmup()
 _model = None
+# Cache ffmpeg path — _find_ffmpeg() does shutil.which + glob, wasteful per-call
+_ffmpeg_path_cache: str | None = None
+# Cache whether CUDA is available so we only probe once at startup
+_cuda_available: bool | None = None
+
+
+def _get_ffmpeg() -> str:
+    """Return cached ffmpeg path. Resolves once, then reuses."""
+    global _ffmpeg_path_cache
+    if _ffmpeg_path_cache is None:
+        _ffmpeg_path_cache = _find_ffmpeg()
+    return _ffmpeg_path_cache
+
+
+def _check_cuda() -> bool:
+    """Check CUDA availability once and cache the result."""
+    global _cuda_available
+    if _cuda_available is None:
+        try:
+            import ctranslate2
+            _cuda_available = ctranslate2.get_cuda_device_count() > 0
+        except Exception:
+            _cuda_available = False
+    return _cuda_available
+
+
+def _is_already_wav_16k_mono(path: str) -> bool:
+    """
+    Fast WAV header check — returns True if the file is already
+    16kHz mono PCM WAV so we can skip the ffmpeg re-encode step.
+    Reads only the first 44 bytes (standard WAV header).
+    """
+    try:
+        with open(path, "rb") as f:
+            header = f.read(44)
+        if len(header) < 44:
+            return False
+        # RIFF/WAVE magic
+        if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+            return False
+        # AudioFormat: 1 = PCM
+        audio_format = int.from_bytes(header[20:22], "little")
+        if audio_format != 1:
+            return False
+        # NumChannels: 1 = mono
+        num_channels = int.from_bytes(header[22:24], "little")
+        if num_channels != 1:
+            return False
+        # SampleRate: 16000
+        sample_rate = int.from_bytes(header[24:28], "little")
+        if sample_rate != 16000:
+            return False
+        return True
+    except Exception:
+        return False
 
 
 def _get_model():
     """Load Whisper model on demand. Cached after first call.
-    
-    Auto-detects CUDA; falls back to CPU with int8 quantization.
-    Model size controlled by WHISPER_MODEL env var (default: large-v3-turbo).
+
+    Auto-detects CUDA:
+    - CUDA available  → use WHISPER_MODEL (default: large-v3-turbo, ~809MB, fast)
+    - CPU only        → use WHISPER_CPU_MODEL (default: small, ~460MB, ~3x faster on CPU)
+
+    Override either model via env vars: WHISPER_MODEL and WHISPER_CPU_MODEL.
+    To force the large model on CPU: set WHISPER_CPU_MODEL=large-v3-turbo.
     """
     global _model
     if _model is None:
         from faster_whisper import WhisperModel
-        # Try CUDA first, fall back to CPU
-        try:
-            import ctranslate2
-            if ctranslate2.get_cuda_device_count() > 0:
-                device, compute_type = "cuda", "float16"
-            else:
-                device, compute_type = "cpu", "int8"
-        except Exception:
+
+        has_cuda = _check_cuda()
+        if has_cuda:
+            device, compute_type = "cuda", "float16"
+            model_name = cfg.WHISPER_MODEL
+        else:
             device, compute_type = "cpu", "int8"
+            # Use smaller model on CPU unless overridden to be the same as WHISPER_MODEL
+            model_name = cfg.WHISPER_CPU_MODEL
+            if model_name != cfg.WHISPER_MODEL:
+                logger.info(
+                    "CPU detected — using '%s' instead of '%s' for ~3x faster transcription."
+                    " Set WHISPER_CPU_MODEL=%s to use the large model on CPU.",
+                    model_name, cfg.WHISPER_MODEL, cfg.WHISPER_MODEL,
+                )
 
         logger.info(
             "Loading faster-whisper model '%s' on %s (%s)...",
-            _WHISPER_MODEL, device, compute_type
+            model_name, device, compute_type
         )
-        _model = WhisperModel(_WHISPER_MODEL, device=device, compute_type=compute_type)
+        _model = WhisperModel(model_name, device=device, compute_type=compute_type)
         logger.info("Model loaded — runs fully offline from now on")
     return _model
 
@@ -103,17 +168,28 @@ def warmup():
 def convert_to_wav(input_path: str) -> str:
     """
     Browser MediaRecorder produces webm/opus.
-    Whisper needs WAV 16kHz mono.
-    Converts any audio format to WAV using ffmpeg (local tool).
-    Synchronous version — used by the Whisper pipeline.
+    Whisper needs WAV 16kHz mono PCM.
+
+    Optimizations:
+    - Skips re-encoding entirely if input is already 16kHz mono WAV (STT_SKIP_WAV_IF_ALREADY=True)
+    - Uses -threads 0 so ffmpeg leverages all available CPU cores (~3x faster conversion)
+    - Forces -acodec pcm_s16le to avoid slow codec negotiation
     """
+    # Fast path: if the file is already a 16kHz mono WAV, return it as-is
+    if cfg.STT_SKIP_WAV_IF_ALREADY and input_path.lower().endswith(".wav"):
+        if _is_already_wav_16k_mono(input_path):
+            logger.debug("Skipping ffmpeg — input is already 16kHz mono WAV: %s", input_path)
+            return input_path  # use directly, no temp file created
+
     output_path = input_path.rsplit(".", 1)[0] + "_converted.wav"
-    ffmpeg_path = _find_ffmpeg()
+    ffmpeg_path = _get_ffmpeg()  # cached — no shutil.which on every call
     subprocess.run([
-        ffmpeg_path, "-y",        # -y = overwrite if exists
+        ffmpeg_path, "-y",
+        "-threads", "0",          # use all CPU cores — ~3x faster on multi-core machines
         "-i", input_path,
-        "-ar", "16000",           # 16kHz sample rate
-        "-ac", "1",               # mono channel
+        "-ar", "16000",           # resample to 16kHz
+        "-ac", "1",               # downmix to mono
+        "-acodec", "pcm_s16le",   # explicit codec avoids negotiation overhead
         output_path
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return output_path
@@ -425,46 +501,61 @@ def transcribe(audio_path: str, language_hint: str = None) -> dict:
             "vad_info": {...},                    # VAD preprocessing stats
         }
     """
-    # Step 1: Convert to WAV
+    # Step 1: Convert to WAV (or skip if already 16kHz mono WAV)
     import time as _time
     t0 = _time.perf_counter()
     wav_path = convert_to_wav(audio_path)
     t_convert = _time.perf_counter() - t0
-    logger.info("⏱ ffmpeg convert in %.0fms", t_convert * 1000)
+    skipped_convert = (wav_path == audio_path)  # True when fast-path taken
+    if skipped_convert:
+        logger.debug("⏱ ffmpeg skipped (already 16kHz WAV) — 0ms")
+    else:
+        logger.info("⏱ ffmpeg convert in %.0fms", t_convert * 1000)
 
-    # Step 2: VAD preprocessing — strip noise, keep only speech
+    # Step 2: VAD preprocessing — ONLY if Whisper's built-in vad_filter is OFF.
+    # When STT_VAD_FILTER=True, Whisper handles VAD internally (faster, zero extra cost).
+    # Running both is redundant — Silero alone took 854ms and Whisper then removed 0ms more.
     t_vad_start = _time.perf_counter()
     vad_info = None
     transcribe_path = wav_path  # default: send full WAV to Whisper
 
-    try:
-        from .vad import extract_speech_audio
-        vad_output_path = wav_path.rsplit(".", 1)[0] + "_vad.wav"
-        vad_info = extract_speech_audio(wav_path, vad_output_path)
+    if not cfg.STT_VAD_FILTER:
+        # External Silero VAD — only used when Whisper's VAD filter is disabled
+        try:
+            from .vad import extract_speech_audio
+            vad_output_path = wav_path.rsplit(".", 1)[0] + "_vad.wav"
+            vad_info = extract_speech_audio(wav_path, vad_output_path)
 
-        if not vad_info["has_speech"]:
-            # No speech detected — return early with explicit flag
-            _cleanup(wav_path)
-            return {
-                "transcript": "",
-                "detected_language": "unknown",
-                "language_confidence": 0.0,
-                "transcription_confidence": 0.0,
-                "is_low_confidence": True,
-                "low_confidence_reason": "no_speech_detected",
-                "segments": [],
-                "vad_info": vad_info,
-            }
+            if not vad_info["has_speech"]:
+                # No speech detected — return early with explicit flag
+                # Guard: don't delete original file if we took the WAV fast-path
+                if not skipped_convert:
+                    _cleanup(wav_path)
+                return {
+                    "transcript": "",
+                    "detected_language": "unknown",
+                    "language_confidence": 0.0,
+                    "transcription_confidence": 0.0,
+                    "is_low_confidence": True,
+                    "low_confidence_reason": "no_speech_detected",
+                    "segments": [],
+                    "vad_info": vad_info,
+                }
 
-        # Use cleaned (speech-only) audio for Whisper
-        transcribe_path = vad_output_path
+            # Use cleaned (speech-only) audio for Whisper
+            transcribe_path = vad_output_path
 
-    except Exception as e:
-        logger.warning("VAD preprocessing failed, using raw audio: %s", e)
-        vad_info = {"error": str(e), "has_speech": True}
+        except Exception as e:
+            logger.warning("VAD preprocessing failed, using raw audio: %s", e)
+            vad_info = {"error": str(e), "has_speech": True}
 
-    t_vad = _time.perf_counter() - t_vad_start
-    logger.info("⏱ VAD preprocessing in %.0fms", t_vad * 1000)
+        t_vad = _time.perf_counter() - t_vad_start
+        logger.info("⏱ Silero VAD in %.0fms", t_vad * 1000)
+    else:
+        # Whisper's vad_filter=True will handle VAD internally — skip Silero (~850ms saved)
+        vad_info = {"skipped": "using_whisper_vad_filter", "has_speech": True}
+        logger.debug("Silero VAD skipped — Whisper vad_filter=True active")
+
 
     # Step 3: Whisper transcription on cleaned audio
     # IMPORTANT: Always use language=None so Whisper auto-detects and outputs
@@ -506,9 +597,14 @@ def transcribe(audio_path: str, language_hint: str = None) -> dict:
         )
 
     # Cleanup temp files (NOT the original audio!)
-    _cleanup(wav_path)
+    # When fast-path was taken (skipped_convert=True), wav_path IS the original —
+    # the route handler (routes_voice.py) will delete it. Don't touch it here.
+    if not skipped_convert:
+        _cleanup(wav_path)
     if transcribe_path != wav_path:
         _cleanup(transcribe_path)
+
+    t_stt_total = _time.perf_counter() - t0
 
     # Step 6: Text-based language re-detection
     # If a language_hint was given, skip re-detection and trust the hint.
@@ -526,6 +622,9 @@ def transcribe(audio_path: str, language_hint: str = None) -> dict:
             whisper_lang, whisper_conf, final_lang, transcript[:60],
         )
 
+    logger.info("⏱ STT total in %.0fms (ffmpeg=%.0fms, whisper=%.0fms)",
+                t_stt_total * 1000, t_convert * 1000, t_whisper * 1000)
+
     return {
         "transcript": transcript.strip(),
         "detected_language": final_lang,
@@ -536,6 +635,10 @@ def transcribe(audio_path: str, language_hint: str = None) -> dict:
         "low_confidence_reason": low_confidence_reason,
         "segments": segment_details,
         "vad_info": vad_info,
+        # Timing breakdown (milliseconds) for API response and monitoring
+        "stt_ms": round(t_stt_total * 1000, 1),
+        "ffmpeg_ms": round(t_convert * 1000, 1),
+        "whisper_ms": round(t_whisper * 1000, 1),
     }
 
 

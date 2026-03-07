@@ -24,7 +24,7 @@ class TTSOrchestrator:
 
     def _ensure_engine_ready(self) -> bool:
         """Warm the engine lazily so TTS still works if startup warmup was skipped."""
-        if indic_engine.is_ready:
+        if indic_engine._ready:
             return True
 
         try:
@@ -32,7 +32,7 @@ class TTSOrchestrator:
         except Exception as exc:
             logger.warning("TTS engine warmup failed on demand: %s", exc)
 
-        return indic_engine.is_ready
+        return indic_engine._ready
 
     async def get_audio_response(self, pipeline_result: dict, detected_language: str) -> dict:
         """

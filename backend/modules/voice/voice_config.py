@@ -49,11 +49,18 @@ class VoiceConfig:
 
     # ─── STT (stt.py) ────────────────────────────────────────────
     WHISPER_MODEL: str            = _env("WHISPER_MODEL", "large-v3-turbo")
+    # Model used automatically when CUDA is not available.
+    # "small" (~460MB) is ~3x faster than "large-v3-turbo" on CPU
+    # with only minor accuracy loss for short food-ordering commands.
+    # Set WHISPER_CPU_MODEL=large-v3-turbo to force the large model on CPU.
+    WHISPER_CPU_MODEL: str        = _env("WHISPER_CPU_MODEL", "small")
     STT_MIN_CONFIDENCE: float     = _env_float("STT_MIN_CONFIDENCE", 0.45)
-    STT_BEAM_SIZE: int            = _env_int("STT_BEAM_SIZE", 0)  # 0 = pure greedy, fastest, minimal loss for short food commands
+    STT_BEAM_SIZE: int            = _env_int("STT_BEAM_SIZE", 1)  # 1 = greedy decoding in faster-whisper (beam_size=0 is invalid)
     STT_TEMPERATURE: float        = _env_float("STT_TEMPERATURE", 0.0)
     STT_VAD_FILTER: bool          = _env_bool("STT_VAD_FILTER", True)  # skip silent segments in Whisper — saves ~200ms
     STT_CONDITION_ON_PREV: bool   = _env_bool("STT_CONDITION_ON_PREV", False)
+    # Skip ffmpeg re-encode if the input file is already 16kHz mono WAV — saves ~80-150ms
+    STT_SKIP_WAV_IF_ALREADY: bool = _env_bool("STT_SKIP_WAV_IF_ALREADY", True)
 
     # ─── VAD (vad.py) ────────────────────────────────────────────
     VAD_THRESHOLD: float          = _env_float("VAD_THRESHOLD", 0.40)
@@ -121,6 +128,12 @@ class VoiceConfig:
     LLM_BRAIN_TIMEOUT_SEC: float  = _env_float("LLM_BRAIN_TIMEOUT_SEC", 0.8)  # fail-fast — saves up to 400ms on slow responses
     LLM_BRAIN_MAX_TOKENS: int     = _env_int("LLM_BRAIN_MAX_TOKENS", 80)
     LLM_BRAIN_MAX_CALLS: int      = _env_int("LLM_BRAIN_MAX_CALLS", 1)  # max LLM brain calls per pipeline run
+
+    # ─── LLM Router (primary intent + item extraction in one LLM call) ────
+    LLM_ROUTER_ENABLED: bool      = _env_bool("LLM_ROUTER_ENABLED", True)
+    LLM_ROUTER_MODEL: str         = _env("LLM_ROUTER_MODEL", "qwen2.5:1.5b")  # fast model for routing
+    LLM_ROUTER_TIMEOUT_SEC: float = _env_float("LLM_ROUTER_TIMEOUT_SEC", 5.0)
+    LLM_ROUTER_MAX_TOKENS: int    = _env_int("LLM_ROUTER_MAX_TOKENS", 250)
 
 
 # Module-level singleton — import this everywhere

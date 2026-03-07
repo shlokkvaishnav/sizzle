@@ -16,6 +16,8 @@ import io
 import re
 import time
 import logging
+import threading
+from collections import OrderedDict
 
 from .voice_config import cfg
 
@@ -40,12 +42,26 @@ class IndicTTSEngine:
 
     No heavy model loading — just an async call to Edge TTS service.
     Supports Indian English, Hindi, Gujarati, Marathi, Kannada.
+
+    TTS Response Cache
+    ------------------
+    Common agent phrases ("Sure, I've added X...") are synthesized once
+    and cached in-memory (LRU, max 128 entries). Cache hits return in 0ms,
+    eliminating the 500-1500ms Edge API round-trip for repeated responses.
+    Cache is per-process (cleared on restart). Size configurable via TTS_CACHE_SIZE env.
     """
 
     _instance = None
     _warmup_time = None
     _ready = False
     _loop = None  # Dedicated event loop for sync→async bridge
+
+    # ── In-memory TTS LRU cache ───────────────────────────────────────────────
+    _TTS_CACHE_MAXSIZE: int = int(__import__('os').getenv("TTS_CACHE_SIZE", "128"))
+    _tts_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+    _tts_cache_lock: threading.Lock = threading.Lock()
+    _tts_cache_hits: int = 0
+    _tts_cache_misses: int = 0
 
     def __new__(cls):
         if cls._instance is None:
@@ -103,18 +119,48 @@ class IndicTTSEngine:
         return _VOICE_MAP.get(language, _VOICE_MAP["en"])
 
     async def _synthesize_async(self, text: str, language: str) -> bytes:
-        """Async synthesis using edge-tts. Returns MP3 bytes."""
+        """Async synthesis using edge-tts. Returns MP3 bytes.
+
+        Checks cache first — returns cached bytes instantly on hit.
+        On cache miss, synthesizes and stores result in the LRU cache.
+        """
         import edge_tts
 
         voice = self._select_voice(text, language)
-        communicate = edge_tts.Communicate(text, voice)
+        cache_key = (text, voice)
 
+        # ── Cache lookup (fast path) ─────────────────────────────────────────
+        with self._tts_cache_lock:
+            if cache_key in self._tts_cache:
+                # Move to end (LRU: most-recently-used stays)
+                self._tts_cache.move_to_end(cache_key)
+                cached_bytes = self._tts_cache[cache_key]
+                self.__class__._tts_cache_hits += 1
+                logger.info(
+                    "TTS cache hit for '%s...' (%s) — 0ms synthesis [hits=%d]",
+                    text[:35], language, self._tts_cache_hits,
+                )
+                return cached_bytes
+            self.__class__._tts_cache_misses += 1
+
+        # ── Cache miss: synthesize via Edge TTS ──────────────────────────────
+        communicate = edge_tts.Communicate(text, voice)
         mp3_buffer = io.BytesIO()
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 mp3_buffer.write(chunk["data"])
+        mp3_bytes = mp3_buffer.getvalue()
 
-        return mp3_buffer.getvalue()
+        # Store in cache (evict oldest if at capacity)
+        if mp3_bytes:  # don't cache empty results
+            with self._tts_cache_lock:
+                self._tts_cache[cache_key] = mp3_bytes
+                self._tts_cache.move_to_end(cache_key)
+                if len(self._tts_cache) > self._TTS_CACHE_MAXSIZE:
+                    evicted_key, _ = self._tts_cache.popitem(last=False)  # evict oldest
+                    logger.debug("TTS cache evicted: '%s...'", str(evicted_key[0])[:30])
+
+        return mp3_bytes
 
     async def synthesize_streaming(self, text: str, language: str):
         """
@@ -232,12 +278,24 @@ class IndicTTSEngine:
 
     def get_status(self) -> dict:
         """Return engine status for health endpoint."""
+        total_reqs = self._tts_cache_hits + self._tts_cache_misses
+        hit_rate = (
+            round(self._tts_cache_hits / total_reqs * 100, 1)
+            if total_reqs > 0 else 0.0
+        )
         return {
             "status": "ready" if self._ready else "not_loaded",
             "engine": "edge-tts",
             "voices": _VOICE_MAP,
             "languages": list(_VOICE_MAP.keys()),
             "warmup_time_s": self._warmup_time,
+            "cache": {
+                "size": len(self._tts_cache),
+                "max_size": self._TTS_CACHE_MAXSIZE,
+                "hits": self._tts_cache_hits,
+                "misses": self._tts_cache_misses,
+                "hit_rate_pct": hit_rate,
+            },
         }
 
 

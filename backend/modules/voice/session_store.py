@@ -40,6 +40,8 @@ def _new_session(session_id: str) -> dict:
         "turn_count": 0,
         "confirmed": False,
         "detected_language": None,
+        "pending_disambiguation": None,   # stored when agent asks "which X?"
+        "conversation_history": [],        # [{role, text}] — last N turns
     }
 
 
@@ -436,3 +438,58 @@ def set_session_language(session_id: str, language: str):
     session = _backend.get(session_id)
     session["detected_language"] = language
     _backend.save(session)
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Disambiguation memory — store what we asked so the next turn can resolve
+# ───────────────────────────────────────────────────────────────────────────
+
+_MAX_CONVERSATION_HISTORY = 10  # keep last N turns
+
+
+def set_pending_disambiguation(session_id: str, context: dict):
+    """Store disambiguation context so the next turn can resolve the user's choice.
+
+    context = {
+        "query": "biryani",
+        "alternatives": [{"item_name": "Chicken Biryani", ...}, ...],
+        "original_item_name": "Biryani",
+    }
+    """
+    session = _backend.get(session_id)
+    session["pending_disambiguation"] = context
+    _backend.save(session)
+
+
+def get_pending_disambiguation(session_id: str) -> dict | None:
+    """Return pending disambiguation context, or None."""
+    session = _backend.get(session_id)
+    return session.get("pending_disambiguation")
+
+
+def clear_pending_disambiguation(session_id: str):
+    """Clear pending disambiguation after it's been resolved."""
+    session = _backend.get(session_id)
+    session["pending_disambiguation"] = None
+    _backend.save(session)
+
+
+def append_conversation_turn(session_id: str, role: str, text: str):
+    """Append a user or agent turn to conversation history (capped).
+
+    role = "user" or "agent"
+    """
+    session = _backend.get(session_id)
+    history = session.get("conversation_history", [])
+    history.append({"role": role, "text": text[:500]})  # cap per-turn length
+    # Keep only the last N turns
+    if len(history) > _MAX_CONVERSATION_HISTORY:
+        history = history[-_MAX_CONVERSATION_HISTORY:]
+    session["conversation_history"] = history
+    _backend.save(session)
+
+
+def get_conversation_history(session_id: str) -> list:
+    """Return conversation history as list of {role, text} dicts."""
+    session = _backend.get(session_id)
+    return session.get("conversation_history", [])

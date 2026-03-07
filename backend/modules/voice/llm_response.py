@@ -130,11 +130,13 @@ class LLMResponseGenerator:
     def _fallback_template(self, pipeline_result: dict, lang: str) -> str:
         """Template fallback that always returns a valid spoken response."""
         items = pipeline_result.get("items", [])
+        all_items_raw = items   # keep reference for variant check below
         intent = pipeline_result.get("intent", "UNCLEAR")
         order = pipeline_result.get("order")
         disambiguation = pipeline_result.get("disambiguation", [])
         stage_results = pipeline_result.get("stage_results", [])
         has_session_items = bool(pipeline_result.get("session_items"))
+
 
         for sr in stage_results:
             err = sr.get("error_type")
@@ -143,7 +145,26 @@ class LLMResponseGenerator:
             if err == "audio_too_short":
                 return self._t_audio_short(lang)
 
+        # ── Variant clarification check (must run BEFORE intent handling) ──
+        # When user said an ambiguous single word (e.g. "biryani") that matched
+        # multiple distinct menu items, the item has needs_disambiguation=True +
+        # variant_query set. We intercept here BEFORE the ORDER block returns
+        # "I've added Chicken Biryani" with the wrong auto-pick.
+        variant_items = [
+            item for item in all_items_raw
+            if item.get("needs_disambiguation") and item.get("variant_query")
+        ]
+        if variant_items:
+            vi = variant_items[0]
+            query = vi.get("variant_query", vi.get("item_name", "that item"))
+            alts = [vi] + vi.get("alternatives", [])   # current best + alternatives
+            return self._t_variant_clarification(lang, query, alts)
+
         if intent == "DONE":
+            # Before asking to confirm — check if dessert/beverage upsell is needed
+            dessert_bev = pipeline_result.get("dessert_beverage_upsell", [])
+            if dessert_bev and has_session_items:
+                return self._t_dessert_beverage_upsell(lang, dessert_bev)
             if has_session_items:
                 return self._t_done(lang)
             return self._t_done_empty(lang)
@@ -187,6 +208,10 @@ class LLMResponseGenerator:
             return self._t_confirm(lang, total)
 
         if intent == "QUERY":
+            # Use the LLM's actual answer if available
+            query_answer = pipeline_result.get("query_answer")
+            if query_answer:
+                return query_answer
             return self._t_query(lang)
 
         if disambiguation and len(disambiguation) <= 2:
@@ -200,6 +225,7 @@ class LLMResponseGenerator:
                 )
 
         return self._t_no_speech(lang, has_session_items)
+
 
     @staticmethod
     def _t_order(lang: str, items: list) -> str:
@@ -375,6 +401,73 @@ class LLMResponseGenerator:
             "gu": f"{item_name} હાલ ઉપલબ્ધ નથી. તેની બદલે બીજું કંઈ લેશો?",
             "mr": f"{item_name} सध्या उपलब्ध नाही. त्याऐवजी दुसरं काही घ्याल का?",
             "kn": f"{item_name} ಈಗ ಲಭ್ಯವಿಲ್ಲ. ಅದರ ಬದಲು ಇನ್ನೇನಾದರೂ ಬೇಕೇ?",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_variant_clarification(lang: str, query: str, variants: list) -> str:
+        """Ask user to choose between multiple variants of the same item.
+        E.g., 4 types of biryani → 'Which biryani would you like?'
+        """
+        # Build a spoken list: "Chicken Biryani, Veg Biryani, or Prawn Biryani"
+        names = [v.get("item_name") or v.get("matched_as", "") for v in variants if v.get("item_name") or v.get("matched_as")]
+        names = [n for n in names if n][:4]  # cap at 4 to avoid very long sentences
+        if not names:
+            en_list = query
+        elif len(names) == 1:
+            en_list = names[0]
+        else:
+            en_list = ", ".join(names[:-1]) + f", or {names[-1]}"
+
+        templates = {
+            "en": f"Which {query} would you like? We have {en_list}.",
+            "hi": f"Kaunsa {query} chahiye? Hamare paas {en_list} hai.",
+            "gu": f"કયો {query} જોઈએ છે? અમારી પાસે {en_list} છે.",
+            "mr": f"कोणता {query} हवा? आमच्याकडे {en_list} आहे.",
+            "kn": f"ಯಾವ {query} ಬೇಕು? ನಮ್ಮ ಬಳಿ {en_list} ಇದೆ.",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_dessert_beverage_upsell(lang: str, suggestions: list) -> str:
+        """Ask if the customer wants desserts/beverages before placing the order."""
+        # Categorise suggestions into desserts vs beverages
+        dessert_names = []
+        bev_names = []
+        _BEV_KEYS = {"beverage", "beverages", "drinks", "drink", "juice",
+                     "mocktail", "coffee", "tea", "shake", "smoothie", "lassi"}
+        for s in suggestions:
+            cat = (s.get("category") or "").lower()
+            name = s.get("item_name", "")
+            if any(k in cat for k in _BEV_KEYS):
+                bev_names.append(name)
+            else:
+                dessert_names.append(name)
+
+        def _en_list(names):
+            if not names:
+                return ""
+            if len(names) == 1:
+                return names[0]
+            return ", ".join(names[:-1]) + f" or {names[-1]}"
+
+        parts_en = []
+        if dessert_names:
+            parts_en.append(f"desserts like {_en_list(dessert_names)}")
+        if bev_names:
+            parts_en.append(f"drinks like {_en_list(bev_names)}")
+        suggestion_str_en = " and ".join(parts_en) or "something sweet or a drink"
+
+        # For other languages just name the items
+        all_names = [s.get("item_name", "") for s in suggestions]
+        all_str = ", ".join(all_names) or "kuch meetha ya peene ke liye"
+
+        templates = {
+            "en": f"Before I place your order, would you like to add any {suggestion_str_en}?",
+            "hi": f"Order place karne se pehle, kya aap {all_str} mein se kuch add karna chahenge?",
+            "gu": f"Order મૂકતાં પહેલાં, શું {all_str} ઉમેરવું છે?",
+            "mr": f"Order देण्यापूर्वी, {all_str} मधलं काही जोडायचं आहे का?",
+            "kn": f"Order ಮಾಡುವ ಮುನ್ನ, {all_str} ಏನಾದರೂ ಸೇರಿಸಬೇಕೇ?",
         }
         return templates.get(lang, templates["en"])
 

@@ -94,6 +94,7 @@ export default function WebCall() {
   const [seconds, setSeconds] = useState(0)
   const [orderPlaced, setOrderPlaced] = useState(false)     // shows ✓ toast
   const [ordersRefreshKey, setOrdersRefreshKey] = useState(0) // increments to trigger orders re-fetch
+  const [quickOptions, setQuickOptions] = useState([])        // tap-to-speak option buttons
   // Keep refs in sync so useVoiceStream always reads the latest values
   // without needing to re-create the WebSocket on every state change.
   const sessionId = useRef(generateSessionId())
@@ -111,6 +112,8 @@ export default function WebCall() {
   const ttsTextFallbackTimerRef = useRef(null)
   // Buffer for streaming TTS chunks — accumulate then play when is_last=true
   const ttsChunkBufferRef = useRef([])
+  const ttsChunkTimeoutRef = useRef(null)   // safety: flush buffer if is_last never arrives
+  const lastSpokenTextRef = useRef(null)     // track last spoken text for fallback
   const restaurantId = restaurantIdRef.current
 
   const appendMessage = useCallback((role, text, language = 'en') => {
@@ -176,11 +179,18 @@ export default function WebCall() {
     [result, selectedLanguage],
   )
 
-  const effectiveOrder = useMemo(
-    () => normalizeOrder(result?.session_order || result?.order),
-    [result],
-  )
-  const hasCart = (result?.session_items || result?.items || []).length > 0
+  // Keep track of the last valid order so QUERY / UNKNOWN turns don't wipe the cart
+  const lastKnownOrderRef = useRef(null)
+  const effectiveOrder = useMemo(() => {
+    const newOrder = normalizeOrder(result?.session_order || result?.order)
+    if (newOrder) {
+      lastKnownOrderRef.current = newOrder
+      return newOrder
+    }
+    // No order in this response — keep showing the previous one
+    return lastKnownOrderRef.current
+  }, [result])
+  const hasCart = (result?.session_items || result?.items || []).length > 0 || !!effectiveOrder
 
   const speakAgentPrompt = useCallback(async (text, language) => {
     appendMessage('agent', text, language)
@@ -235,6 +245,37 @@ export default function WebCall() {
       if (data.intent === 'CONFIRM' && data.session_items?.length > 0) {
         void handleConfirmOrder(data)
       }
+
+      // Build quick-option buttons for variant clarification & dessert/beverage upsell
+      const newOptions = []
+
+      // 1. Variant picks: e.g. 4 biryani types
+      const disambig = data.disambiguation || []
+      for (const entry of disambig) {
+        if (entry.variant_query && entry.alternatives?.length > 0) {
+          // All choices = the primary item + alternatives
+          const choices = [
+            { label: entry.item_name, text: entry.item_name },
+            ...entry.alternatives.map(a => ({ label: a.item_name || a.matched_as, text: a.item_name || a.matched_as }))
+          ].filter(c => c.label)
+          newOptions.push(...choices.slice(0, 4))
+          break // one disambiguation group at a time
+        }
+      }
+
+      // 2. Dessert / beverage upsell: Yes / No buttons
+      if (!newOptions.length && data.dessert_beverage_upsell?.length > 0) {
+        const lang = data.detected_language || 'en'
+        const YES_LABELS = { en: 'Yes, add some!', hi: 'Haan, add karo', gu: 'હા, ઉમેરો', mr: 'हो, जोडा', kn: 'ಹೌದು, ಸೇರಿಸಿ' }
+        const NO_LABELS = { en: 'No thanks, place order', hi: 'Nahi, order karo', gu: 'ના, order કરો', mr: 'नाही, order करा', kn: 'ಬೇಡ, order ಮಾಡಿ' }
+        const yesItems = data.dessert_beverage_upsell.map(s => s.item_name).join(', ')
+        newOptions.push(
+          { label: YES_LABELS[lang] || YES_LABELS.en, text: `Yes, add ${yesItems}` },
+          { label: NO_LABELS[lang] || NO_LABELS.en, text: 'No, please confirm the order as is' }
+        )
+      }
+
+      setQuickOptions(newOptions)
     },
     onTTSChunk: (audioB64, payload) => {
       // Real Edge TTS audio arrived — cancel any pending browser-TTS fallback
@@ -243,8 +284,9 @@ export default function WebCall() {
         ttsTextFallbackTimerRef.current = null
       }
 
-      // spoken_text is only included on the first chunk (chunk_index === 0)
+      // Track spoken text for fallback
       if (payload?.spoken_text) {
+        lastSpokenTextRef.current = payload.spoken_text
         appendMessage('agent', payload.spoken_text, payload.language || activeLanguage)
       }
 
@@ -253,8 +295,38 @@ export default function WebCall() {
         ttsChunkBufferRef.current.push(audioB64)
       }
 
+      // Safety timeout: if is_last never arrives within 8s, flush buffer
+      clearTimeout(ttsChunkTimeoutRef.current)
+      if (!payload?.is_last) {
+        ttsChunkTimeoutRef.current = setTimeout(() => {
+          const chunks = ttsChunkBufferRef.current
+          ttsChunkBufferRef.current = []
+          if (chunks.length > 0) {
+            // Play whatever we have
+            const binaryChunks = chunks.map(b64 => {
+              const binary = atob(b64)
+              const bytes = new Uint8Array(binary.length)
+              for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+              return bytes
+            })
+            const totalLen = binaryChunks.reduce((sum, c) => sum + c.length, 0)
+            const combined = new Uint8Array(totalLen)
+            let offset = 0
+            for (const chunk of binaryChunks) { combined.set(chunk, offset); offset += chunk.length }
+            const combinedB64 = btoa(String.fromCharCode(...combined))
+            playVoiceResponse(combinedB64, lastSpokenTextRef.current, activeLanguage)
+          } else if (lastSpokenTextRef.current) {
+            // No audio chunks at all — browser TTS fallback
+            playVoiceResponse(null, lastSpokenTextRef.current, activeLanguage)
+          }
+          ttsChunkTimeoutRef.current = null
+        }, 8000)
+      }
+
       // When the backend signals is_last=true, concatenate and play full audio
       if (payload?.is_last) {
+        clearTimeout(ttsChunkTimeoutRef.current)
+        ttsChunkTimeoutRef.current = null
         const chunks = ttsChunkBufferRef.current
         ttsChunkBufferRef.current = []  // reset buffer for next response
 
@@ -334,6 +406,7 @@ export default function WebCall() {
         setError(null)
         silenceRepromptCountRef.current = 0
         lastIntentRef.current = null
+        lastKnownOrderRef.current = null
         // Fresh session ID for the next call
         sessionId.current = generateSessionId()
         // Hide the toast after the reset
@@ -381,6 +454,7 @@ export default function WebCall() {
     micPausedRef.current = false
     setMicPaused(false)
     silenceRepromptCountRef.current = 0
+    lastKnownOrderRef.current = null
     sessionId.current = generateSessionId()
 
     const connected = await connect()
@@ -406,6 +480,7 @@ export default function WebCall() {
     recorderRef.current?.stopRecording()
     handleInterruptAudio()
     disconnect()
+    setQuickOptions([])   // clear option buttons on hang-up
   }, [disconnect, handleInterruptAudio])
 
   const toggleMicPause = useCallback(() => {
@@ -426,6 +501,7 @@ export default function WebCall() {
       const data = await submitTextOrder(manualText, sessionId.current)
       setManualText('')
       setResult(data)
+      setQuickOptions([])   // clear option buttons after user typed something
       appendMessage('customer', manualText, activeLanguage)
       if (data.tts_text) {
         appendMessage('agent', data.tts_text, data.tts_language || data.detected_language || activeLanguage)
@@ -441,6 +517,30 @@ export default function WebCall() {
       setError(err.response?.data?.detail || err.detail || 'Could not send the fallback text')
     }
   }, [activeLanguage, appendMessage, manualText, playVoiceResponse])
+
+  // Send a quick-option tap as a text order through the pipeline
+  const handleQuickOption = useCallback(async (text) => {
+    setQuickOptions([])
+    try {
+      stopAudio()
+      appendMessage('customer', text, activeLanguage)
+      const data = await submitTextOrder(text, sessionId.current)
+      setResult(data)
+      if (data.tts_text) {
+        appendMessage('agent', data.tts_text, data.tts_language || data.detected_language || activeLanguage)
+      }
+      if (data.tts_audio_b64 || data.tts_text) {
+        playVoiceResponse(
+          data.tts_audio_b64,
+          data.tts_text,
+          data.tts_language || data.detected_language || activeLanguage,
+        )
+      }
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Option selection failed')
+    }
+  }, [activeLanguage, appendMessage, playVoiceResponse, stopAudio])
+
 
   useEffect(() => {
     let intervalId
@@ -585,6 +685,47 @@ export default function WebCall() {
             </div>
 
             <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+              {/* Quick-option tap buttons — variant picks or dessert/beverage upsell */}
+              <AnimatePresence>
+                {quickOptions.length > 0 && (
+                  <motion.div
+                    key="quick-options"
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.22 }}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                      padding: '10px 12px',
+                      borderRadius: 'var(--radius-md)',
+                      background: 'color-mix(in srgb, var(--accent) 10%, transparent)',
+                      border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
+                    }}
+                  >
+                    {quickOptions.map((opt, i) => (
+                      <button
+                        key={i}
+                        className="btn btn-ghost"
+                        style={{
+                          fontSize: 13,
+                          padding: '7px 14px',
+                          borderColor: 'color-mix(in srgb, var(--accent) 50%, transparent)',
+                          color: 'var(--accent)',
+                          fontWeight: 500,
+                          flex: quickOptions.length === 2 ? '1' : undefined,
+                        }}
+                        onClick={() => handleQuickOption(opt.text)}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <VoiceRecorder
                 ref={recorderRef}
                 onStartRecording={handleInterruptAudio}
