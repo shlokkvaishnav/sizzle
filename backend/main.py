@@ -96,7 +96,38 @@ def _run_auto_migrations(eng):
                 ))
                 logger.info("Migration: ensured restaurant_tables.current_order_id → INTEGER FK to orders(id)")
         except Exception as exc:
-            logger.debug("current_order_id type migration skipped: %s", exc)
+                logger.debug("current_order_id type migration skipped: %s", exc)
+
+
+def _ensure_v_sales_view(eng):
+    """Create or replace v_sales so settled (confirmed) orders appear in revenue/reports."""
+    from sqlalchemy import text
+    is_pg = "postgres" in str(eng.url)
+    view_sql = """
+        SELECT
+            oi.id                AS id,
+            o.restaurant_id      AS restaurant_id,
+            oi.item_id           AS item_id,
+            o.order_id           AS order_id,
+            oi.quantity          AS quantity,
+            oi.unit_price        AS unit_price,
+            oi.line_total         AS total_price,
+            o.order_type         AS order_type,
+            COALESCE(o.settled_at, o.updated_at) AS sold_at
+        FROM order_items oi
+        JOIN orders o ON o.id = oi.order_pk
+        WHERE o.status = 'confirmed'
+    """
+    try:
+        with eng.begin() as conn:
+            if is_pg:
+                conn.execute(text("CREATE OR REPLACE VIEW v_sales AS " + view_sql.strip()))
+            else:
+                conn.execute(text("DROP VIEW IF EXISTS v_sales"))
+                conn.execute(text("CREATE VIEW v_sales AS " + view_sql.strip()))
+        logger.info("v_sales view ready — settled orders will appear in revenue/reports")
+    except Exception as exc:
+        logger.warning("v_sales view creation skipped (revenue may use fallback): %s", exc)
 
 
 def _background_warmup(app_state):
@@ -157,6 +188,7 @@ async def lifespan(app: FastAPI):
 
     Base.metadata.create_all(bind=engine)
     _run_auto_migrations(engine)
+    _ensure_v_sales_view(engine)
 
     # -- DYNAMIC: Load menu from DATABASE (fast — just a DB query) --
     db = SessionLocal()

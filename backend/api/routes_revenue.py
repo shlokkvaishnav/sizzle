@@ -1,4 +1,4 @@
-﻿"""
+"""
 routes_revenue.py — Revenue Intelligence API Endpoints
 ========================================================
 /api/revenue/* — Dashboard, menu matrix, hidden stars, risks,

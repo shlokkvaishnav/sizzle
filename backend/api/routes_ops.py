@@ -756,12 +756,15 @@ def settle_table(
 
         db.commit()
         db.refresh(order)
+        db.refresh(table)
 
+        # Response reflects persisted DB state (order appears in Orders list and v_sales/reports)
         return {
             "table_id": table.id,
             "table_number": table.table_number,
             "status": "empty",
             "order_id": order.order_id,
+            "order_number": order.order_number,
             "total_amount": round(total, 2),
             "payment_method": body.payment_method,
             "settled_at": order.settled_at.isoformat() if order.settled_at else None,
@@ -771,6 +774,7 @@ def settle_table(
         raise
     except Exception as e:
         logger.exception("Error settling table")
+        db.rollback()
         raise HTTPException(status_code=500, detail=f"Table settle failed: {e}")
 
 

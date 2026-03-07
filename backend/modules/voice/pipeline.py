@@ -367,22 +367,27 @@ class VoicePipeline:
                 pending_disambig_ctx = get_pending_disambiguation(session_id)
                 if pending_disambig_ctx:
                     norm_lower = normalized.lower().strip()
-                    # Check against disambiguation alternatives
-                    for alt in pending_disambig_ctx.get("alternatives", []):
-                        alt_name = alt.get("item_name", "").lower()
-                        if alt_name and (norm_lower in alt_name or alt_name in norm_lower
-                                        or any(w in alt_name for w in norm_lower.split() if len(w) > 2)):
+                    # Check against all offered options (primary + alternatives)
+                    all_options = pending_disambig_ctx.get("all_options")
+                    if not all_options:
+                        all_options = pending_disambig_ctx.get("alternatives", [])
+                    for opt in all_options:
+                        opt_name = (opt.get("item_name") or "").strip().lower()
+                        if not opt_name:
+                            continue
+                        if (norm_lower in opt_name or opt_name in norm_lower
+                                or any(w in opt_name for w in norm_lower.split() if len(w) > 2)):
                             primary_intent = "ORDER"
                             matched_pattern = "disambig_resolution"
                             for ir in intent_results:
                                 if ir["intent"] == "UNKNOWN":
                                     ir["intent"] = "ORDER"
                                     ir["matched_pattern"] = "disambig_resolution"
+                                    ir["disambiguation_resolved_item"] = opt
                             logger.info("Disambiguation resolved: '%s' -> ORDER (matched '%s')",
-                                       normalized, alt.get("item_name"))
+                                       normalized, opt.get("item_name"))
                             clear_pending_disambiguation(session_id)
                             break
-                    # Also check against full menu (user might say exact item name)
                     if primary_intent == "UNKNOWN":
                         for mi in self.menu_items:
                             if mi.name and norm_lower in mi.name.lower():
@@ -391,6 +396,10 @@ class VoicePipeline:
                                 for ir in intent_results:
                                     if ir["intent"] == "UNKNOWN":
                                         ir["intent"] = "ORDER"
+                                        ir["disambiguation_resolved_item"] = {
+                                            "item_id": mi.id,
+                                            "item_name": mi.name,
+                                        }
                                         ir["matched_pattern"] = "disambig_menu_match"
                                 logger.info("Disambiguation menu match: '%s' -> ORDER (matched '%s')",
                                            normalized, mi.name)
@@ -429,8 +438,25 @@ class VoicePipeline:
                             user_messages.append(_query_answer)
 
                 elif clause_intent in ("ORDER", "CANCEL"):
-                    clause_matched = extract_all_items(clause, self.corpus)
-                    clause_with_qty = extract_quantities_for_items(clause, clause_matched)
+                    resolved = ir.get("disambiguation_resolved_item")
+                    if resolved and clause_intent == "ORDER" and resolved.get("item_id"):
+                        db_item = menu_map.get(resolved["item_id"])
+                        if db_item:
+                            clause_matched = [{
+                                "item_id": resolved["item_id"],
+                                "matched_as": resolved.get("item_name", db_item.name),
+                                "confidence": 0.95,
+                                "position": 0,
+                            }]
+                            clause_with_qty = extract_quantities_for_items(clause, clause_matched)
+                            if not clause_with_qty:
+                                clause_with_qty = [{**clause_matched[0], "quantity": 1}]
+                        else:
+                            clause_matched = []
+                            clause_with_qty = []
+                    else:
+                        clause_matched = extract_all_items(clause, self.corpus)
+                        clause_with_qty = extract_quantities_for_items(clause, clause_matched)
 
                     clause_with_mods = []
                     for item in clause_with_qty:
@@ -535,39 +561,10 @@ class VoicePipeline:
                                 # don't accidentally clear the entire cart
                                 clause_intent = "_CANCEL_NEEDS_CLARIFY"
 
-                    # Ambiguous match: try LLM disambiguation first, then prompt user
-                    session_items_for_disambig = get_session_items(session_id) if session_id else []
+                    # Ambiguous match: always ask user which variant (e.g. which biryani)
                     for item in enriched:
                         if item.get("needs_disambiguation"):
                             alternatives = item.get("alternatives", [])
-                            # Try LLM to auto-resolve before asking user
-                            if (alternatives and llm_brain is not None and llm_brain.enabled):
-                                try:
-                                    all_options = [{"item_name": item["item_name"],
-                                                    "unit_price": item["unit_price"]}] + alternatives
-                                    chosen = llm_brain.resolve_disambiguation_sync(
-                                        clause, all_options, session_items_for_disambig,
-                                    )
-                                    if chosen:
-                                        # Find the chosen item in menu and replace
-                                        chosen_db = next(
-                                            (m for m in self.menu_items if m.name == chosen), None
-                                        )
-                                        if chosen_db:
-                                            item["item_id"] = chosen_db.id
-                                            item["item_name"] = chosen_db.name
-                                            item["unit_price"] = chosen_db.selling_price
-                                            item["line_total"] = item["quantity"] * chosen_db.selling_price
-                                            item["confidence"] = 0.90
-                                            item["needs_disambiguation"] = False
-                                            item["alternatives"] = []
-                                            item["source"] = "llm_disambiguation"
-                                            logger.info("LLM auto-resolved disambiguation → %s", chosen)
-                                            continue  # skip adding error prompt
-                                except Exception as e:
-                                    logger.debug("LLM disambiguation failed: %s", e)
-
-                            # LLM couldn't resolve or not available → prompt user
                             # Enrich alternatives with real item names from menu_map
                             for alt in item.get("alternatives", []):
                                 db_alt = menu_map.get(alt["item_id"])
@@ -824,6 +821,7 @@ class VoicePipeline:
         for item in all_enriched_items:
             if item.get("needs_disambiguation"):
                 disambiguation_items.append({
+                    "item_id": item.get("item_id"),
                     "item_name": item["item_name"],
                     "confidence": item["confidence"],
                     "alternatives": item.get("alternatives", []),
@@ -836,13 +834,16 @@ class VoicePipeline:
             or any(sr.get("status") == "failure" for sr in stage_results)
         )
 
-        # Save pending disambiguation to session so the NEXT turn knows
-        # what alternatives were offered and can resolve the user's choice
+        # Save pending disambiguation: store all_options (primary + alternatives) for resolution
         if session_id and disambiguation_items:
+            first = disambiguation_items[0]
+            primary_opt = {"item_id": first.get("item_id"), "item_name": first.get("item_name", "?")}
+            all_options = [primary_opt] + first.get("alternatives", [])
             set_pending_disambiguation(session_id, {
                 "query": normalized,
-                "alternatives": disambiguation_items[0].get("alternatives", []),
-                "original_item_name": disambiguation_items[0].get("item_name", "?"),
+                "alternatives": first.get("alternatives", []),
+                "original_item_name": first.get("item_name", "?"),
+                "all_options": all_options,
             })
         elif session_id and not disambiguation_items and primary_intent == "ORDER":
             # User made a clear order — clear any stale disambiguation

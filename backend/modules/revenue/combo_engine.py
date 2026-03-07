@@ -1,4 +1,4 @@
-﻿"""
+"""
 combo_engine.py — FP-Growth Combo Generator
 ==============================================
 Uses FP-Growth algorithm (via mlxtend) to discover
