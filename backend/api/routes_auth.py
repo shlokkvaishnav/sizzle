@@ -46,11 +46,9 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     if not email or not req.password:
         raise HTTPException(status_code=400, detail="Email and password are required")
 
-    password_hash = hashlib.sha256(req.password.encode()).hexdigest()
-
     restaurant = db.query(Restaurant).filter(
         Restaurant.email == email,
-        Restaurant.password_hash == password_hash,
+        Restaurant.password_hash == req.password,
         Restaurant.is_active == True,
     ).first()
 

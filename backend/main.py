@@ -155,8 +155,12 @@ async def lifespan(app: FastAPI):
     """Create DB tables and load VoicePipeline with menu data from DB."""
     import threading
 
-    Base.metadata.create_all(bind=engine)
-    _run_auto_migrations(engine)
+    if os.getenv("RUN_MIGRATIONS", "false").lower() in ("1", "true", "yes"):
+        logger.info("Running schema migrations...")
+        Base.metadata.create_all(bind=engine)
+        _run_auto_migrations(engine)
+    else:
+        logger.info("Skipping migrations (set RUN_MIGRATIONS=true to enable)")
 
     # -- DYNAMIC: Load menu from DATABASE (fast — just a DB query) --
     db = SessionLocal()

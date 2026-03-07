@@ -15,6 +15,10 @@ build/
 .env.local
 .env.*.local
 
+# Test artifacts
+*.mp3
+.pytest_cache/
+
 # Python
 __pycache__/
 **/__pycache__/
