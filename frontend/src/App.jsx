@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { LanguageProvider } from './context/LanguageContext'
 import { AuthProvider } from './context/AuthContext'
 import { SettingsProvider } from './context/SettingsContext'
+import ErrorBoundary from './components/ErrorBoundary'
 
 const RequireAuth = lazy(() => import('./components/RequireAuth'))
 const DashboardLayout = lazy(() => import('./layouts/DashboardLayout'))
@@ -12,6 +13,7 @@ const Signup = lazy(() => import('./pages/Signup'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const MenuAnalysis = lazy(() => import('./pages/MenuAnalysis'))
 const ComboEngine = lazy(() => import('./pages/ComboEngine'))
+const HiddenStars = lazy(() => import('./pages/HiddenStars'))
 const VoiceOrder = lazy(() => import('./pages/VoiceOrder'))
 const WebCall = lazy(() => import('./pages/WebCall'))
 const Orders = lazy(() => import('./pages/Orders'))
@@ -22,6 +24,16 @@ const Settings = lazy(() => import('./pages/Settings'))
 const AboutUs = lazy(() => import('./pages/AboutUs'))
 const Product = lazy(() => import('./pages/Product'))
 const Contact = lazy(() => import('./pages/Contact'))
+
+function NotFound() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 12 }}>
+      <div style={{ fontSize: 64, fontWeight: 800, color: 'var(--accent)' }}>404</div>
+      <p style={{ fontSize: 14, color: 'var(--text-secondary)' }}>Page not found</p>
+      <a href="/" style={{ fontSize: 13, color: 'var(--accent)', textDecoration: 'underline' }}>Go Home</a>
+    </div>
+  )
+}
 
 function RouteFallback() {
   return (
@@ -37,6 +49,7 @@ export default function App() {
       <AuthProvider>
         <SettingsProvider>
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <ErrorBoundary>
           <Suspense fallback={<RouteFallback />}>
             <Routes>
               <Route path="/" element={<Landing />} />
@@ -56,6 +69,7 @@ export default function App() {
               >
                 <Route index element={<Dashboard />} />
                 <Route path="menu-analysis" element={<MenuAnalysis />} />
+                <Route path="hidden-stars" element={<HiddenStars />} />
                 <Route path="combos" element={<ComboEngine />} />
                 <Route path="voice-order" element={<VoiceOrder />} />
                 <Route path="web-call" element={<WebCall />} />
@@ -65,8 +79,10 @@ export default function App() {
                 <Route path="reports" element={<Reports />} />
                 <Route path="settings" element={<Settings />} />
               </Route>
+              <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
+          </ErrorBoundary>
         </BrowserRouter>
         </SettingsProvider>
       </AuthProvider>

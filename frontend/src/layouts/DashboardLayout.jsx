@@ -4,33 +4,35 @@ import { motion } from 'motion/react'
 import {
   LayoutDashboard, Target, Link2, ClipboardList,
   LayoutGrid, Archive, BarChart3, Settings, LogOut,
-  ChevronsRight, Mic, PhoneCall,
+  ChevronsRight, Mic, PhoneCall, Sparkles,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
+import { useTranslation } from '../context/LanguageContext'
 
-const navGroups = [
+const navGroupsDef = [
   {
-    label: 'Intelligence',
+    labelKey: 'sidebar_intelligence',
     items: [
-      { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', end: true },
-      { to: '/dashboard/menu-analysis', icon: Target, label: 'Menu Analysis' },
+      { to: '/dashboard', icon: LayoutDashboard, labelKey: 'sidebar_dashboard', end: true },
+      { to: '/dashboard/menu-analysis', icon: Target, labelKey: 'sidebar_menu_analysis' },
+      { to: '/dashboard/hidden-stars', icon: Sparkles, labelKey: 'sidebar_hidden_stars' },
     ],
   },
   {
-    label: 'Operations',
+    labelKey: 'sidebar_operations',
     items: [
-      { to: '/dashboard/combos', icon: Link2, label: 'Combo Engine' },
-      { to: '/dashboard/web-call', icon: PhoneCall, label: 'Web Call' },
-      { to: '/dashboard/orders', icon: ClipboardList, label: 'Orders' },
-      { to: '/dashboard/tables', icon: LayoutGrid, label: 'Tables' },
-      { to: '/dashboard/inventory', icon: Archive, label: 'Inventory' },
-      { to: '/dashboard/reports', icon: BarChart3, label: 'Reports' },
+      { to: '/dashboard/combos', icon: Link2, labelKey: 'sidebar_combos' },
+      { to: '/dashboard/web-call', icon: PhoneCall, labelKey: 'sidebar_web_call' },
+      { to: '/dashboard/orders', icon: ClipboardList, labelKey: 'sidebar_orders' },
+      { to: '/dashboard/tables', icon: LayoutGrid, labelKey: 'sidebar_tables' },
+      { to: '/dashboard/inventory', icon: Archive, labelKey: 'sidebar_inventory' },
+      { to: '/dashboard/reports', icon: BarChart3, labelKey: 'sidebar_reports' },
     ],
   },
   {
-    label: 'System',
+    labelKey: 'sidebar_system',
     items: [
-      { to: '/dashboard/settings', icon: Settings, label: 'Settings' },
+      { to: '/dashboard/settings', icon: Settings, labelKey: 'sidebar_settings' },
     ],
   },
 ]
@@ -40,6 +42,7 @@ export default function DashboardLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { logout, restaurant } = useAuth()
+  const { t } = useTranslation()
   const onVoiceOrderPage = (
     location.pathname === '/dashboard/voice-order'
     || location.pathname === '/dashboard/web-call'
@@ -68,11 +71,13 @@ export default function DashboardLayout() {
 
         {/* Nav items */}
         <ul className="nav-links">
-          {navGroups.map((group, gi) => (
-            <li key={group.label} style={{ listStyle: 'none' }}>
-              {open && <div className="nav-group-label">{group.label}</div>}
+          {navGroupsDef.map((group, gi) => (
+            <li key={group.labelKey} style={{ listStyle: 'none' }}>
+              {open && <div className="nav-group-label">{t(group.labelKey)}</div>}
               <ul style={{ listStyle: 'none', padding: 0 }}>
-                {group.items.map((item, i) => (
+                {group.items.map((item, i) => {
+                  const label = t(item.labelKey)
+                  return (
                   <motion.li
                     key={item.to}
                     initial={{ opacity: 0, x: -20 }}
@@ -88,16 +93,17 @@ export default function DashboardLayout() {
                         if (!open) states.push('nav-link--icon-only')
                         return states.join(' ')
                       }}
-                      data-tooltip={!open ? item.label : undefined}
-                      aria-label={!open ? item.label : undefined}
+                      data-tooltip={!open ? label : undefined}
+                      aria-label={!open ? label : undefined}
                     >
                       <span className="nav-icon">
                         <item.icon size={18} />
                       </span>
-                      {open && <span className="nav-label">{item.label}</span>}
+                      {open && <span className="nav-label">{label}</span>}
                     </NavLink>
                   </motion.li>
-                ))}
+                  )
+                })}
               </ul>
             </li>
           ))}
@@ -108,11 +114,11 @@ export default function DashboardLayout() {
           <button
             className={`sidebar-logout ${!open ? 'sidebar-logout--icon' : ''}`}
             onClick={() => { logout(); navigate('/login') }}
-            title={!open ? 'Logout' : undefined}
-            aria-label={!open ? 'Logout' : undefined}
+            title={!open ? t('sidebar_logout') : undefined}
+            aria-label={!open ? t('sidebar_logout') : undefined}
           >
             <LogOut size={16} />
-            {open && <span>Logout</span>}
+            {open && <span>{t('sidebar_logout')}</span>}
           </button>
         </div>
 
@@ -120,20 +126,20 @@ export default function DashboardLayout() {
         <button
           className="sidebar-toggle"
           onClick={() => setOpen(!open)}
-          title={open ? 'Collapse sidebar' : 'Expand sidebar'}
+          title={open ? t('sidebar_collapse_tip') : t('sidebar_expand')}
         >
           <ChevronsRight
             size={16}
             className={`sidebar-toggle-icon ${open ? 'sidebar-toggle-icon--flipped' : ''}`}
           />
-          {open && <span className="sidebar-toggle-label">Collapse</span>}
+          {open && <span className="sidebar-toggle-label">{t('sidebar_collapse')}</span>}
         </button>
       </motion.nav>
 
       {/* Main Content */}
       <main className={`main-content ${open ? '' : 'main-content--expanded'}`}>
         <div className="main-content-restaurant-bar">
-          {restaurant?.restaurant_name || restaurant?.name || 'Restaurant'}
+          <span>{restaurant?.restaurant_name || restaurant?.name || 'Restaurant'}</span>
         </div>
         <Outlet />
       </main>
@@ -142,10 +148,10 @@ export default function DashboardLayout() {
         <button
           className="dashboard-voice-fab"
           onClick={() => navigate('/dashboard/voice-order')}
-          title="Start Voice Order"
+          title={t('dash_start_voice_order')}
         >
           <Mic size={18} />
-          <span>Voice Order</span>
+          <span>{t('dash_voice_order')}</span>
         </button>
       )}
     </div>

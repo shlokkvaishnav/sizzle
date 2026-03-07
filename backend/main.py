@@ -155,8 +155,12 @@ async def lifespan(app: FastAPI):
     """Create DB tables and load VoicePipeline with menu data from DB."""
     import threading
 
-    Base.metadata.create_all(bind=engine)
-    _run_auto_migrations(engine)
+    if os.getenv("RUN_MIGRATIONS", "false").lower() in ("1", "true", "yes"):
+        logger.info("Running schema migrations...")
+        Base.metadata.create_all(bind=engine)
+        _run_auto_migrations(engine)
+    else:
+        logger.info("Skipping migrations (set RUN_MIGRATIONS=true to enable)")
 
     # -- DYNAMIC: Load menu from DATABASE (fast — just a DB query) --
     db = SessionLocal()
@@ -183,12 +187,9 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
-    # -- Start background combo training scheduler --
-    try:
-        from modules.revenue.combo_engine import start_combo_scheduler
-        start_combo_scheduler(SessionLocal)
-    except Exception as e:
-        logger.warning(f"Combo scheduler failed to start: {e}")
+    # -- Combo training is now lazy: runs inline on first GET /combos request --
+    # No background scheduler needed — avoids race conditions during hot-reload.
+    logger.info("Combo engine: lazy inline training enabled (no startup scheduler)")
 
     # -- DEFERRED: Heavy ML warmups in a background thread --
     warmup_thread = threading.Thread(
@@ -282,8 +283,8 @@ class LoginInput(BaseModel):
     pin: str = Field(..., min_length=4, max_length=6, pattern=r"^\d{4,6}$")
 
 
-@app.post("/api/auth/login", tags=["Auth"])
-def login(body: LoginInput, db=Depends(get_db)):
+@app.post("/api/auth/staff-login", tags=["Auth"])
+def staff_login(body: LoginInput, db=Depends(get_db)):
     """Authenticate staff via PIN → JWT token."""
     return authenticate_staff(body.pin, db)
 
@@ -378,4 +379,5 @@ if __name__ == "__main__":
 
     _host = os.getenv("HOST", "0.0.0.0")
     _port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("main:app", host=_host, port=_port, reload=True)
+    _reload = os.getenv("RELOAD", "false").lower() in ("1", "true", "yes")
+    uvicorn.run("main:app", host=_host, port=_port, reload=_reload)

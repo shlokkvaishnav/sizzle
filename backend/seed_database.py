@@ -1,21 +1,54 @@
 """
-Sizzle — Full Database Seed Script
-====================================
-1. Drops & recreates all tables (clean slate)
-2. Seeds 2 restaurants with full data:
-   - Restaurant 1: Spice Craft (Indian Multi-Cuisine, 100 items)
-   - Restaurant 2: Dragon Wok  (Chinese & Pan-Asian, 50 items)
-3. Seeds ingredients + recipes (menu_item_ingredients)
-4. Seeds 200 historical orders per restaurant (past 90 days)
-5. Logs stock usage from those orders
+Sizzle — Seed Data Only (no schema changes)
+============================================
+Inserts seed data into existing tables. Does NOT drop or create tables.
+Use with Neon (or any Postgres) when tables already exist.
 
-Run from backend/ folder:
-    python seed_database.py
+1. Inserts 2 restaurants + restaurant_settings
+2. Categories, menu items, ingredients, menu_item_ingredients (recipes)
+3. Restaurant tables
+4. 200 historical orders per restaurant (status=confirmed, past 90 days)
+5. Stock logs from order usage
+
+Set DATABASE_URL in backend/.env to your Neon connection string.
+
+Run:  cd backend && python seed_database.py
 """
 
-import os, sys, random, hashlib, string, json
+import os
+import sys
+import random
+import hashlib
+import string
+import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+
+# Load .env from backend/ or project root so Neon/Supabase DATABASE_URL is set
+_backend_dir = Path(__file__).resolve().parent
+_project_root = _backend_dir.parent
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(_backend_dir / ".env")
+    load_dotenv(_project_root / ".env")
+except ImportError:
+    pass
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    print("ERROR: DATABASE_URL not set. Add it to backend/.env (e.g. Neon or Supabase connection string).")
+    sys.exit(1)
+
+# Prefer Postgres for seed (Neon, Supabase, etc.)
+if not DATABASE_URL.strip().lower().startswith(("postgresql://", "postgres://")):
+    print("WARNING: seed_database.py is designed for PostgreSQL (Neon, Supabase).")
+    print("SQLite schema differs (e.g. no ENUMs). Proceeding may fail.")
 
 try:
     import psycopg2
@@ -25,17 +58,6 @@ except ImportError:
     os.system(f"{sys.executable} -m pip install psycopg2-binary")
     import psycopg2
     from psycopg2.extras import execute_values
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    print("ERROR: DATABASE_URL not set in .env")
-    sys.exit(1)
 
 # ─────────────────────────── helpers ────────────────────────────
 
@@ -55,261 +77,6 @@ def rand_dt(days_ago_max=90, days_ago_min=1):
         minutes=random.randint(0, 59),
     )
     return now_utc() - delta
-
-# ──────────────────────────── DDL ───────────────────────────────
-
-DDL = """
--- ══════════════════ DROP EVERYTHING ══════════════════
-DROP VIEW  IF EXISTS v_sales CASCADE;
-DROP TABLE IF EXISTS stock_logs CASCADE;
-DROP TABLE IF EXISTS menu_item_ingredients CASCADE;
-DROP TABLE IF EXISTS ingredients CASCADE;
-DROP TABLE IF EXISTS combo_suggestions CASCADE;
-DROP TABLE IF EXISTS voice_sessions CASCADE;
-DROP TABLE IF EXISTS kots CASCADE;
-DROP TABLE IF EXISTS order_items CASCADE;
-DROP TABLE IF EXISTS restaurant_tables CASCADE;
-DROP TABLE IF EXISTS orders CASCADE;
-DROP TABLE IF EXISTS menu_items CASCADE;
-DROP TABLE IF EXISTS categories CASCADE;
-DROP TABLE IF EXISTS restaurant_settings CASCADE;
-DROP TABLE IF EXISTS restaurants CASCADE;
-
-DROP TYPE IF EXISTS table_status CASCADE;
-DROP TYPE IF EXISTS order_status CASCADE;
-DROP TYPE IF EXISTS order_type CASCADE;
-DROP TYPE IF EXISTS order_source CASCADE;
-DROP TYPE IF EXISTS payment_method CASCADE;
-DROP TYPE IF EXISTS stock_reason CASCADE;
-DROP TYPE IF EXISTS measure_unit CASCADE;
-
--- ══════════════════ ENUM TYPES ══════════════════
-CREATE TYPE table_status   AS ENUM ('empty','occupied','reserved','cleaning');
-CREATE TYPE order_status   AS ENUM ('building','confirmed','cancelled');
-CREATE TYPE order_type     AS ENUM ('dine_in','takeaway','delivery');
-CREATE TYPE order_source   AS ENUM ('voice','manual');
-CREATE TYPE payment_method AS ENUM ('cash','card','upi');
-CREATE TYPE stock_reason   AS ENUM ('purchase','usage','waste','adjustment');
-CREATE TYPE measure_unit   AS ENUM ('g','kg','ml','L','pcs');
-
--- ══════════════════ TABLES ══════════════════
-
-CREATE TABLE restaurants (
-    id            SERIAL PRIMARY KEY,
-    name          VARCHAR(200)  NOT NULL,
-    slug          VARCHAR(100)  UNIQUE NOT NULL,
-    email         VARCHAR(200)  UNIQUE NOT NULL,
-    password_hash VARCHAR(256)  NOT NULL,
-    phone         VARCHAR(20),
-    address       TEXT,
-    cuisine_type  VARCHAR(100),
-    logo_url      VARCHAR(500),
-    is_active     BOOLEAN       NOT NULL DEFAULT TRUE,
-    created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
-);
-CREATE INDEX idx_restaurants_active ON restaurants (id) WHERE is_active;
-
-CREATE TABLE restaurant_settings (
-    id              SERIAL PRIMARY KEY,
-    restaurant_id   INTEGER NOT NULL UNIQUE REFERENCES restaurants(id) ON DELETE CASCADE,
-    menu_management JSONB NOT NULL DEFAULT '{}',
-    notifications   JSONB NOT NULL DEFAULT '{}',
-    integrations    JSONB NOT NULL DEFAULT '{}',
-    billing_plan    JSONB NOT NULL DEFAULT '{}',
-    security        JSONB NOT NULL DEFAULT '{}',
-    voice_ai_config JSONB NOT NULL DEFAULT '{}',
-    profile_extras  JSONB NOT NULL DEFAULT '{}',
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE categories (
-    id            SERIAL PRIMARY KEY,
-    restaurant_id INTEGER      NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
-    name          VARCHAR(100) NOT NULL,
-    name_hi       VARCHAR(100),
-    name_mr       VARCHAR(100),
-    name_kn       VARCHAR(100),
-    name_gu       VARCHAR(100),
-    name_hi_en    VARCHAR(100),
-    display_order SMALLINT     NOT NULL DEFAULT 0,
-    is_active     BOOLEAN      NOT NULL DEFAULT TRUE,
-    UNIQUE (restaurant_id, name)
-);
-CREATE INDEX idx_categories_active ON categories (restaurant_id) WHERE is_active;
-
-CREATE TABLE menu_items (
-    id            SERIAL PRIMARY KEY,
-    restaurant_id INTEGER       NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
-    name          VARCHAR(200)  NOT NULL,
-    name_hi       VARCHAR(200),
-    name_mr       VARCHAR(200),
-    name_kn       VARCHAR(200),
-    name_gu       VARCHAR(200),
-    name_hi_en    VARCHAR(200),
-    description   TEXT,
-    aliases       TEXT[]        NOT NULL DEFAULT '{}',
-    category_id   INTEGER       REFERENCES categories(id) ON DELETE SET NULL,
-    selling_price NUMERIC(10,2) NOT NULL,
-    food_cost     NUMERIC(10,2) NOT NULL,
-    modifiers     JSONB         NOT NULL DEFAULT '{}',
-    is_veg        BOOLEAN       NOT NULL DEFAULT TRUE,
-    is_available  BOOLEAN       NOT NULL DEFAULT TRUE,
-    is_bestseller BOOLEAN       NOT NULL DEFAULT FALSE,
-    current_stock INTEGER,
-    tags          JSONB         NOT NULL DEFAULT '[]',
-    created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
-);
-CREATE INDEX idx_mi_restaurant ON menu_items (restaurant_id);
-CREATE INDEX idx_mi_category   ON menu_items (category_id);
-CREATE INDEX idx_mi_available  ON menu_items (restaurant_id, category_id) WHERE is_available;
-CREATE INDEX idx_mi_tags       ON menu_items USING GIN (tags);
-
-CREATE TABLE restaurant_tables (
-    id               SERIAL PRIMARY KEY,
-    restaurant_id    INTEGER      NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
-    table_number     VARCHAR(10)  NOT NULL,
-    capacity         SMALLINT     NOT NULL DEFAULT 4,
-    section          VARCHAR(50)  NOT NULL DEFAULT 'main',
-    status           table_status NOT NULL DEFAULT 'empty',
-    current_order_id INTEGER,
-    UNIQUE (restaurant_id, table_number)
-);
-CREATE INDEX idx_tables_restaurant ON restaurant_tables (restaurant_id);
-CREATE INDEX idx_tables_occupied   ON restaurant_tables (restaurant_id) WHERE status = 'occupied';
-
-CREATE TABLE orders (
-    id             SERIAL PRIMARY KEY,
-    restaurant_id  INTEGER         NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
-    order_id       VARCHAR(50)     UNIQUE NOT NULL,
-    order_number   VARCHAR(20),
-    total_amount   NUMERIC(10,2)   NOT NULL DEFAULT 0,
-    status         order_status    NOT NULL DEFAULT 'building',
-    order_type     order_type      NOT NULL DEFAULT 'dine_in',
-    table_id       INTEGER         REFERENCES restaurant_tables(id) ON DELETE SET NULL,
-    source         order_source    NOT NULL DEFAULT 'manual',
-    guest_name     VARCHAR(150),
-    guest_count    SMALLINT,
-    payment_method payment_method,
-    settled_at     TIMESTAMPTZ,
-    created_at     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
-);
-ALTER TABLE restaurant_tables
-    ADD CONSTRAINT fk_tables_current_order
-    FOREIGN KEY (current_order_id) REFERENCES orders(id) ON DELETE SET NULL;
-
-CREATE INDEX idx_orders_restaurant ON orders (restaurant_id);
-CREATE INDEX idx_orders_status     ON orders (restaurant_id, status);
-CREATE INDEX idx_orders_building   ON orders (restaurant_id) WHERE status = 'building';
-CREATE INDEX idx_orders_table      ON orders (table_id) WHERE table_id IS NOT NULL;
-CREATE INDEX idx_orders_created    ON orders USING BRIN (created_at);
-
-CREATE TABLE order_items (
-    id                SERIAL PRIMARY KEY,
-    order_pk          INTEGER       NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-    item_id           INTEGER       NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
-    quantity          SMALLINT      NOT NULL DEFAULT 1 CHECK (quantity > 0),
-    unit_price        NUMERIC(10,2) NOT NULL,
-    modifiers_applied JSONB         NOT NULL DEFAULT '{}',
-    line_total        NUMERIC(10,2) NOT NULL
-);
-CREATE INDEX idx_oi_order ON order_items (order_pk);
-CREATE INDEX idx_oi_item  ON order_items (item_id);
-
-CREATE TABLE kots (
-    id            SERIAL PRIMARY KEY,
-    kot_id        VARCHAR(50)  UNIQUE NOT NULL,
-    order_pk      INTEGER      NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-    items_summary JSONB        NOT NULL,
-    print_ready   TEXT,
-    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
-CREATE INDEX idx_kots_order ON kots (order_pk);
-
-CREATE TABLE combo_suggestions (
-    id               SERIAL PRIMARY KEY,
-    restaurant_id    INTEGER       NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
-    name             VARCHAR(200)  NOT NULL,
-    item_ids         JSONB         NOT NULL,
-    item_names       JSONB         NOT NULL,
-    individual_total NUMERIC(10,2),
-    combo_price      NUMERIC(10,2),
-    discount_pct     NUMERIC(5,2),
-    expected_margin  NUMERIC(10,2),
-    support          REAL,
-    confidence       REAL,
-    lift             REAL,
-    combo_score      REAL,
-    created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
-);
-CREATE INDEX idx_combos_restaurant ON combo_suggestions (restaurant_id);
-CREATE INDEX idx_combos_score      ON combo_suggestions (combo_score DESC NULLS LAST);
-CREATE INDEX idx_combos_items      ON combo_suggestions USING GIN (item_ids);
-
-CREATE TABLE ingredients (
-    id            SERIAL PRIMARY KEY,
-    restaurant_id INTEGER       NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
-    name          VARCHAR(150)  NOT NULL,
-    unit          measure_unit  NOT NULL DEFAULT 'g',
-    current_stock NUMERIC(10,2) NOT NULL DEFAULT 0,
-    reorder_level NUMERIC(10,2) NOT NULL DEFAULT 0,
-    cost_per_unit NUMERIC(10,4) NOT NULL DEFAULT 0,
-    is_active     BOOLEAN       NOT NULL DEFAULT TRUE,
-    created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    UNIQUE (restaurant_id, name)
-);
-CREATE INDEX idx_ingredients_active ON ingredients (restaurant_id) WHERE is_active;
-CREATE INDEX idx_ingredients_low    ON ingredients (restaurant_id)
-                                    WHERE current_stock <= reorder_level AND is_active;
-
-CREATE TABLE menu_item_ingredients (
-    id            SERIAL PRIMARY KEY,
-    menu_item_id  INTEGER       NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
-    ingredient_id INTEGER       NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
-    quantity_used NUMERIC(10,4) NOT NULL,
-    UNIQUE (menu_item_id, ingredient_id)
-);
-CREATE INDEX idx_mii_ingredient ON menu_item_ingredients (ingredient_id);
-
-CREATE TABLE stock_logs (
-    id            SERIAL PRIMARY KEY,
-    ingredient_id INTEGER       NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
-    change_qty    NUMERIC(10,2) NOT NULL,
-    reason        stock_reason  NOT NULL,
-    note          TEXT,
-    created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
-);
-CREATE INDEX idx_sl_ingredient ON stock_logs (ingredient_id);
-CREATE INDEX idx_sl_created    ON stock_logs USING BRIN (created_at);
-CREATE INDEX idx_sl_waste      ON stock_logs (ingredient_id) WHERE reason = 'waste';
-
-CREATE TABLE voice_sessions (
-    id          SERIAL PRIMARY KEY,
-    session_id  VARCHAR(100) UNIQUE NOT NULL,
-    last_active TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    order_items JSONB        NOT NULL DEFAULT '[]',
-    last_items  JSONB        NOT NULL DEFAULT '[]',
-    turn_count  SMALLINT     NOT NULL DEFAULT 0,
-    confirmed   BOOLEAN      NOT NULL DEFAULT FALSE
-);
-CREATE INDEX idx_vs_active ON voice_sessions (last_active);
-
--- ══════════════════ VIEW ══════════════════
-CREATE OR REPLACE VIEW v_sales AS
-SELECT
-    oi.id                                AS id,
-    o.restaurant_id                      AS restaurant_id,
-    oi.item_id                           AS item_id,
-    o.order_id                           AS order_id,
-    oi.quantity                          AS quantity,
-    oi.unit_price                        AS unit_price,
-    oi.line_total                        AS total_price,
-    o.order_type::TEXT                   AS order_type,
-    COALESCE(o.settled_at, o.updated_at) AS sold_at
-FROM order_items oi
-JOIN orders o ON o.id = oi.order_pk
-WHERE o.status = 'confirmed';
-"""
 
 # ──────────────────────── seed data ─────────────────────────────
 
@@ -763,129 +530,170 @@ R2_RECIPES = {
 # ═══════════════════════════════════════════════════════════════
 
 def run():
-    print("Connecting to Supabase PostgreSQL...")
+    print("Connecting to PostgreSQL (Neon)...")
     conn = psycopg2.connect(DATABASE_URL)
     conn.autocommit = False
     cur = conn.cursor()
+    print("  ✓ Connected (tables unchanged, inserting data only)")
 
-    print("Running DDL (drop + recreate all tables)...")
-    cur.execute(DDL)
-    conn.commit()
-    print("  ✓ Schema created")
-
-    # ── 1. restaurants ──────────────────────────────────────────
-    def insert_restaurant(r):
+    # ── 1. restaurants (use existing if slug already exists) ─────
+    def get_or_create_restaurant(r):
+        cur.execute("SELECT id FROM restaurants WHERE slug = %s", (r["slug"],))
+        row = cur.fetchone()
+        if row:
+            rid = row[0]
+            cur.execute(
+                "INSERT INTO restaurant_settings (restaurant_id) VALUES (%s) ON CONFLICT (restaurant_id) DO NOTHING",
+                (rid,),
+            )
+            return rid
         cur.execute("""
             INSERT INTO restaurants (name, slug, email, password_hash, phone, address, cuisine_type)
             VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id
         """, (r["name"], r["slug"], r["email"], h(r["password"]),
               r["phone"], r["address"], r["cuisine_type"]))
         rid = cur.fetchone()[0]
-        cur.execute("""
-            INSERT INTO restaurant_settings (restaurant_id) VALUES (%s)
-        """, (rid,))
+        cur.execute("INSERT INTO restaurant_settings (restaurant_id) VALUES (%s)", (rid,))
         return rid
 
-    r1_id = insert_restaurant(RESTAURANT_1)
-    r2_id = insert_restaurant(RESTAURANT_2)
+    r1_id = get_or_create_restaurant(RESTAURANT_1)
+    r2_id = get_or_create_restaurant(RESTAURANT_2)
     conn.commit()
-    print(f"  ✓ Restaurants created: R1={r1_id} (Spice Craft), R2={r2_id} (Dragon Wok)")
+    print(f"  ✓ Restaurants: R1={r1_id} (Spice Craft), R2={r2_id} (Dragon Wok)")
 
-    # ── 2. categories ───────────────────────────────────────────
-    def insert_categories(restaurant_id, cat_dict):
+    # ── 2. categories (get or create by restaurant_id + name) ─────
+    def get_or_create_categories(restaurant_id, cat_dict):
         cat_ids = {}
         for name, (name_hi, name_mr, name_kn, name_gu, name_hi_en, order) in cat_dict.items():
-            cur.execute("""
-                INSERT INTO categories
-                    (restaurant_id, name, name_hi, name_mr, name_kn, name_gu, name_hi_en, display_order)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
-            """, (restaurant_id, name, name_hi, name_mr, name_kn, name_gu, name_hi_en, order))
-            cat_ids[name] = cur.fetchone()[0]
+            cur.execute(
+                "SELECT id FROM categories WHERE restaurant_id = %s AND name = %s",
+                (restaurant_id, name),
+            )
+            row = cur.fetchone()
+            if row:
+                cat_ids[name] = row[0]
+            else:
+                cur.execute("""
+                    INSERT INTO categories
+                        (restaurant_id, name, name_hi, name_mr, name_kn, name_gu, name_hi_en, display_order)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+                """, (restaurant_id, name, name_hi, name_mr, name_kn, name_gu, name_hi_en, order))
+                cat_ids[name] = cur.fetchone()[0]
         return cat_ids
 
-    r1_cats = insert_categories(r1_id, R1_CATEGORIES)
-    r2_cats = insert_categories(r2_id, R2_CATEGORIES)
+    r1_cats = get_or_create_categories(r1_id, R1_CATEGORIES)
+    r2_cats = get_or_create_categories(r2_id, R2_CATEGORIES)
     conn.commit()
     print(f"  ✓ Categories: {len(r1_cats)} for R1, {len(r2_cats)} for R2")
 
-    # ── 3. ingredients ──────────────────────────────────────────
-    def insert_ingredients(restaurant_id, ing_list):
+    # ── 3. ingredients (get or create by restaurant_id + name) ────
+    def get_or_create_ingredients(restaurant_id, ing_list):
         ing_ids = {}
         for name, unit, stock, reorder, cost in ing_list:
-            cur.execute("""
-                INSERT INTO ingredients
-                    (restaurant_id, name, unit, current_stock, reorder_level, cost_per_unit)
-                VALUES (%s,%s,%s,%s,%s,%s) RETURNING id
-            """, (restaurant_id, name, unit, stock, reorder, cost))
-            ing_ids[name] = cur.fetchone()[0]
+            cur.execute(
+                "SELECT id FROM ingredients WHERE restaurant_id = %s AND name = %s",
+                (restaurant_id, name),
+            )
+            row = cur.fetchone()
+            if row:
+                ing_ids[name] = row[0]
+            else:
+                cur.execute("""
+                    INSERT INTO ingredients
+                        (restaurant_id, name, category, unit, current_stock, reorder_level, cost_per_unit)
+                    VALUES (%s,%s,'Other',%s,%s,%s,%s) RETURNING id
+                """, (restaurant_id, name, unit, stock, reorder, cost))
+                ing_ids[name] = cur.fetchone()[0]
         return ing_ids
 
-    r1_ings = insert_ingredients(r1_id, R1_INGREDIENTS)
-    r2_ings = insert_ingredients(r2_id, R2_INGREDIENTS)
+    r1_ings = get_or_create_ingredients(r1_id, R1_INGREDIENTS)
+    r2_ings = get_or_create_ingredients(r2_id, R2_INGREDIENTS)
     conn.commit()
     print(f"  ✓ Ingredients: {len(r1_ings)} for R1, {len(r2_ings)} for R2")
 
-    # ── 4. menu items + recipes ─────────────────────────────────
-    def insert_menu_items(restaurant_id, cat_ids, items_dict, recipes, ing_ids):
+    # ── 4. menu items + recipes (get or create by restaurant_id + name) ─
+    def get_or_create_menu_items(restaurant_id, cat_ids, items_dict, recipes, ing_ids):
         item_ids = {}
         for cat_name, items in items_dict.items():
             cid = cat_ids.get(cat_name)
             for row in items:
                 name, name_hi, name_mr, name_kn, name_gu, name_hi_en, \
                     price, food_cost, is_veg, bestseller, aliases, desc = row
-                is_bestseller = bool(bestseller) and random.random() < 0.5
-                cur.execute("""
-                    INSERT INTO menu_items
-                        (restaurant_id, name, name_hi, name_mr, name_kn, name_gu, name_hi_en,
-                         description, aliases,
-                         category_id, selling_price, food_cost,
-                         is_veg, is_available, is_bestseller,
-                         modifiers, tags)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s,%s,%s) RETURNING id
-                """, (
-                    restaurant_id, name, name_hi, name_mr, name_kn, name_gu, name_hi_en,
-                    desc, aliases,
-                    cid, price, food_cost,
-                    is_veg, is_bestseller,
-                    json.dumps({"spice_level": ["mild", "medium", "hot"]}),
-                    json.dumps(["veg"] if is_veg else ["non-veg"]),
-                ))
-                item_id = cur.fetchone()[0]
-                item_ids[name] = (item_id, price)
-                # insert recipe
+                cur.execute(
+                    "SELECT id, selling_price FROM menu_items WHERE restaurant_id = %s AND name = %s",
+                    (restaurant_id, name),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    item_id, price = existing[0], float(existing[1])
+                    item_ids[name] = (item_id, price)
+                else:
+                    is_bestseller = bool(bestseller) and random.random() < 0.5
+                    cur.execute("""
+                        INSERT INTO menu_items
+                            (restaurant_id, name, name_hi, name_mr, name_kn, name_gu, name_hi_en,
+                             description, aliases,
+                             category_id, selling_price, food_cost,
+                             is_veg, is_available, is_bestseller,
+                             modifiers, tags)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s,%s,%s) RETURNING id
+                    """, (
+                        restaurant_id, name, name_hi, name_mr, name_kn, name_gu, name_hi_en,
+                        desc, aliases,
+                        cid, price, food_cost,
+                        is_veg, is_bestseller,
+                        json.dumps({"spice_level": ["mild", "medium", "hot"]}),
+                        json.dumps(["veg"] if is_veg else ["non-veg"]),
+                    ))
+                    item_id = cur.fetchone()[0]
+                    item_ids[name] = (item_id, price)
+                # recipe: only insert if not already present
                 recipe = recipes.get(name, [])
                 for ing_name, qty in recipe:
                     iid = ing_ids.get(ing_name)
                     if iid:
-                        cur.execute("""
-                            INSERT INTO menu_item_ingredients
-                                (menu_item_id, ingredient_id, quantity_used)
-                            VALUES (%s,%s,%s)
-                            ON CONFLICT (menu_item_id, ingredient_id) DO NOTHING
-                        """, (item_id, iid, qty))
+                        cur.execute(
+                            "SELECT 1 FROM menu_item_ingredients WHERE menu_item_id = %s AND ingredient_id = %s",
+                            (item_id, iid),
+                        )
+                        if not cur.fetchone():
+                            cur.execute("""
+                                INSERT INTO menu_item_ingredients
+                                    (menu_item_id, ingredient_id, quantity_used)
+                                VALUES (%s,%s,%s)
+                            """, (item_id, iid, qty))
         return item_ids  # {name: (id, price)}
 
-    r1_items = insert_menu_items(r1_id, r1_cats, R1_ITEMS, R1_RECIPES, r1_ings)
-    r2_items = insert_menu_items(r2_id, r2_cats, R2_ITEMS, R2_RECIPES, r2_ings)
+    r1_items = get_or_create_menu_items(r1_id, r1_cats, R1_ITEMS, R1_RECIPES, r1_ings)
+    r2_items = get_or_create_menu_items(r2_id, r2_cats, R2_ITEMS, R2_RECIPES, r2_ings)
     conn.commit()
     print(f"  ✓ Menu items: {len(r1_items)} for R1, {len(r2_items)} for R2")
 
-    # ── 5. restaurant tables ─────────────────────────────────────
-    def insert_tables(restaurant_id, count=15):
+    # ── 5. restaurant tables (get or create by restaurant_id + table_number) ─
+    def get_or_create_tables(restaurant_id, count=15):
         tbl_ids = []
         sections = ["main"] * 8 + ["patio"] * 4 + ["private"] * 3
         caps     = [2, 4, 4, 4, 6, 6, 8, 4, 4, 2, 4, 4, 6, 8, 4]
         for i in range(count):
-            cur.execute("""
-                INSERT INTO restaurant_tables
-                    (restaurant_id, table_number, capacity, section, status)
-                VALUES (%s,%s,%s,%s,'empty') RETURNING id
-            """, (restaurant_id, f"T{i+1}", caps[i], sections[i]))
-            tbl_ids.append(cur.fetchone()[0])
+            tnum = f"T{i+1}"
+            cur.execute(
+                "SELECT id FROM restaurant_tables WHERE restaurant_id = %s AND table_number = %s",
+                (restaurant_id, tnum),
+            )
+            row = cur.fetchone()
+            if row:
+                tbl_ids.append(row[0])
+            else:
+                cur.execute("""
+                    INSERT INTO restaurant_tables
+                        (restaurant_id, table_number, capacity, section, status)
+                    VALUES (%s,%s,%s,%s,'empty') RETURNING id
+                """, (restaurant_id, tnum, caps[i], sections[i]))
+                tbl_ids.append(cur.fetchone()[0])
         return tbl_ids
 
-    r1_tables = insert_tables(r1_id)
-    r2_tables = insert_tables(r2_id, 10)
+    r1_tables = get_or_create_tables(r1_id)
+    r2_tables = get_or_create_tables(r2_id, 10)
     conn.commit()
     print(f"  ✓ Tables: {len(r1_tables)} for R1, {len(r2_tables)} for R2")
 
@@ -927,17 +735,16 @@ def run():
             guest_n  = random.choice(guest_names)
 
             oid_str = f"ORD-{created.strftime('%Y%m%d')}-{uid()}"
+            table_num = None  # optional; schema has table_number
             cur.execute("""
                 INSERT INTO orders
-                    (restaurant_id, order_id, order_number, status, order_type,
-                     table_id, source,
-                     guest_name, guest_count, payment_method, settled_at,
+                    (restaurant_id, order_id, order_number, total_amount, status, order_type,
+                     table_number, table_id, source, guest_name, guest_count, payment_method, settled_at,
                      created_at, updated_at)
-                VALUES (%s,%s,%s,'confirmed',%s,%s,'manual',%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,0,'confirmed',%s,%s,%s,'manual',%s,%s,%s,%s,%s,%s)
                 RETURNING id
             """, (restaurant_id, oid_str, f"#{order_counter}",
-                  otype, table_id,
-                  guest_n, guest_ct, pmethod, settled,
+                  otype, table_num, table_id, guest_n, guest_ct, pmethod, settled,
                   created, settled))
             order_pk = cur.fetchone()[0]
 

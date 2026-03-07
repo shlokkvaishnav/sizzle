@@ -10,6 +10,7 @@ import {
   getMenuItemsList,
   addItemToTableOrder,
 } from '../api/client'
+import { useTranslation } from '../context/LanguageContext'
 
 const statusStyles = {
   empty: { color: 'var(--success)', bg: 'var(--success-subtle)', label: 'Available' },
@@ -131,6 +132,7 @@ function SettleModal({ table, onClose, onSettle }) {
 function AddItemModal({ table, onClose, onItemAdded }) {
   const [menuItems, setMenuItems] = useState([])
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [adding, setAdding] = useState(null)
   const [addedItems, setAddedItems] = useState({}) // itemId -> true (brief success flash)
@@ -138,10 +140,10 @@ function AddItemModal({ table, onClose, onItemAdded }) {
 
   useEffect(() => {
     setLoading(true)
-    getMenuItemsList(search)
+    getMenuItemsList(debouncedSearch)
       .then((d) => setMenuItems(d.items || []))
       .finally(() => setLoading(false))
-  }, [search])
+  }, [debouncedSearch])
 
   const handleAdd = async (itemId) => {
     setAdding(itemId)
@@ -173,14 +175,17 @@ function AddItemModal({ table, onClose, onItemAdded }) {
           <button className="tbl-modal-close" onClick={onClose}>×</button>
         </div>
         <div className="tbl-modal-body">
-          <input
-            className="input"
-            placeholder="Search menu items..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ marginBottom: 'var(--space-4)' }}
-            autoFocus
-          />
+          <div className="search-input-wrap">
+            <input
+              className="input"
+              placeholder="Search menu items..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') setDebouncedSearch(search.trim()) }}
+              autoFocus
+            />
+            {loading && <span className="search-dots"><span /><span /><span /></span>}
+          </div>
           {addError && (
             <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 'var(--space-3)', padding: '6px 10px', background: 'var(--danger-subtle)', borderRadius: 'var(--radius-sm)' }}>
               {addError}
@@ -227,11 +232,13 @@ function AddItemModal({ table, onClose, onItemAdded }) {
 
 /* ── Main Tables Component ── */
 export default function Tables() {
+  const { t } = useTranslation()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('')
   const [sectionFilter, setSectionFilter] = useState('')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [viewMode, setViewMode] = useState('floor')
   const [selectedTableId, setSelectedTableId] = useState(null)
   const [settleTarget, setSettleTarget] = useState(null)
@@ -243,9 +250,9 @@ export default function Tables() {
     () => ({
       status: statusFilter || undefined,
       section: sectionFilter || undefined,
-      search: search || undefined,
+      search: debouncedSearch || undefined,
     }),
-    [statusFilter, sectionFilter, search],
+    [statusFilter, sectionFilter, debouncedSearch],
   )
 
   const reload = useCallback(() => {
@@ -358,17 +365,17 @@ export default function Tables() {
       {/* Hero */}
       <div className="app-hero">
         <div>
-          <div className="app-hero-eyebrow">Operations</div>
-          <h1 className="app-hero-title">Tables</h1>
-          <p className="app-hero-sub">Visual floor plan and live table management.</p>
+          <div className="app-hero-eyebrow">{t('page_tables_eyebrow')}</div>
+          <h1 className="app-hero-title">{t('page_tables_title')}</h1>
+          <p className="app-hero-sub">{t('page_tables_sub')}</p>
         </div>
         <div className="app-hero-metrics">
           <div className="app-kpi">
-            <div className="app-kpi-label">Total</div>
+            <div className="app-kpi-label">{t('page_tables_total')}</div>
             <div className="app-kpi-value">{summary.total_tables}</div>
           </div>
           <div className="app-kpi">
-            <div className="app-kpi-label" style={{ color: statusStyles.empty.color }}>Available</div>
+            <div className="app-kpi-label" style={{ color: statusStyles.empty.color }}>{t('page_tables_available')}</div>
             <div className="app-kpi-value" style={{ color: statusStyles.empty.color }}>{summary.empty || 0}</div>
           </div>
           <div className="app-kpi">
@@ -388,12 +395,16 @@ export default function Tables() {
         <div className="card-body">
           <div className="tables-toolbar">
             <div className="filters-row tables-filters-row">
-              <input
-                className="input"
-                placeholder="Search table number"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
+              <div className="search-input-wrap">
+                <input
+                  className="input"
+                  placeholder="Search table number"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') setDebouncedSearch(search.trim()) }}
+                />
+                {loading && <span className="search-dots"><span /><span /><span /></span>}
+              </div>
               <select className="input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                 <option value="">All Statuses</option>
                 <option value="empty">Available</option>
