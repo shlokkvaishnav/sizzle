@@ -49,6 +49,21 @@ def _parse_date(value: str | None) -> date | None:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {value}. Use YYYY-MM-DD.")
 
 
+def _order_from_current_order_id(db: Session, raw_oid) -> Order | None:
+    """
+    Resolve an Order from table.current_order_id, which may be stored as
+    integer (orders.id) or string (orders.order_id) depending on schema/data.
+    """
+    if raw_oid is None:
+        return None
+    if isinstance(raw_oid, str) and not str(raw_oid).isdigit():
+        return db.query(Order).filter(Order.order_id == raw_oid).first()
+    try:
+        return db.query(Order).filter(Order.id == int(raw_oid)).first()
+    except (TypeError, ValueError):
+        return None
+
+
 class TableUpdateInput(BaseModel):
     status: str = Field(..., pattern=r"^(empty|occupied|reserved|cleaning)$")
     current_order_id: int | None = None
@@ -180,9 +195,11 @@ def _sync_table_for_order(db: Session, order: Order):
     if not table_number:
         if previous_table_id:
             table = db.query(RestaurantTable).filter(RestaurantTable.id == previous_table_id).first()
-            if table and table.current_order_id == order.id:
-                table.current_order_id = None
-                table.status = "empty"
+            if table:
+                current = _order_from_current_order_id(db, table.current_order_id)
+                if current and current.id == order.id:
+                    table.current_order_id = None
+                    table.status = "empty"
         order.table_id = None
         return
 
@@ -198,12 +215,15 @@ def _sync_table_for_order(db: Session, order: Order):
     order.table_id = table.id
     if previous_table_id and previous_table_id != table.id:
         previous_table = db.query(RestaurantTable).filter(RestaurantTable.id == previous_table_id).first()
-        if previous_table and previous_table.current_order_id == order.id:
-            previous_table.current_order_id = None
-            previous_table.status = "empty"
+        if previous_table:
+            current = _order_from_current_order_id(db, previous_table.current_order_id)
+            if current and current.id == order.id:
+                previous_table.current_order_id = None
+                previous_table.status = "empty"
 
     if order.status == "cancelled":
-        if table.current_order_id == order.id:
+        current = _order_from_current_order_id(db, table.current_order_id)
+        if current and current.id == order.id:
             table.current_order_id = None
             table.status = "empty"
     else:
@@ -344,6 +364,8 @@ def get_orders(
                 Order.order_type,
                 Order.table_number,
                 Order.source,
+                Order.settled_at,
+                Order.payment_method,
                 Order.created_at,
             )
             .filter(*filters)
@@ -371,6 +393,8 @@ def get_orders(
                     "order_type": o.order_type,
                     "table_number": o.table_number,
                     "source": o.source,
+                    "settled_at": o.settled_at.isoformat() if o.settled_at else None,
+                    "payment_method": o.payment_method,
                     "created_at": o.created_at.isoformat() if o.created_at else None,
                 }
                 for o in orders
@@ -402,6 +426,8 @@ def get_order(order_id: str, db: Session = Depends(get_db)):
             "order_type": order.order_type,
             "table_number": order.table_number,
             "source": order.source,
+            "settled_at": order.settled_at.isoformat() if order.settled_at else None,
+            "payment_method": order.payment_method,
             "created_at": order.created_at.isoformat() if order.created_at else None,
             "updated_at": order.updated_at.isoformat() if order.updated_at else None,
         }
@@ -728,9 +754,9 @@ def settle_table(
 ):
     """
     Settle the bill for an occupied table:
-    1. Mark the order as 'confirmed'
-    2. Create sale_transactions for each order item
-    3. Free the table
+    1. Persist order as confirmed with total, settled_at, payment_method
+    2. Free the table (status=empty, current_order_id=None)
+    Settled orders appear in the DB and in v_sales / Orders list.
     """
     try:
         table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).with_for_update().first()
@@ -741,24 +767,28 @@ def settle_table(
         if not table.current_order_id:
             raise HTTPException(status_code=400, detail="No order linked to this table")
 
-        order = db.query(Order).filter(Order.id == table.current_order_id).first()
+        order = _order_from_current_order_id(db, table.current_order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
-
-        # Mark order as confirmed
-        order.status = "confirmed"
-        order.updated_at = _utcnow_fn()
 
         # Recalculate total from order items
         order_items = db.query(OrderItem).filter(OrderItem.order_pk == order.id).all()
         total = sum(oi.line_total for oi in order_items)
+
+        # Persist settled state on the order (so it reflects in DB, v_sales, and Orders list)
+        now = _utcnow_fn()
+        order.status = "confirmed"
         order.total_amount = total
+        order.updated_at = now
+        order.settled_at = now
+        order.payment_method = body.payment_method
 
         # Free the table
         table.status = "empty"
         table.current_order_id = None
 
         db.commit()
+        db.refresh(order)
 
         return {
             "table_id": table.id,
@@ -767,6 +797,7 @@ def settle_table(
             "order_id": order.order_id,
             "total_amount": round(total, 2),
             "payment_method": body.payment_method,
+            "settled_at": order.settled_at.isoformat() if order.settled_at else None,
             "settled": True,
         }
     except HTTPException:
@@ -986,8 +1017,8 @@ def add_item_to_table_order(
         if not item:
             raise HTTPException(status_code=404, detail="Menu item not found")
 
-        # Load the order for this table
-        order = db.query(Order).filter(Order.id == table.current_order_id).first()
+        # Load the order for this table (current_order_id may be int PK or string order_id)
+        order = _order_from_current_order_id(db, table.current_order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found for this table")
 

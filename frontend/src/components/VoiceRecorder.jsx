@@ -16,7 +16,16 @@ const MAX_RECORD_MS = VOICE_MAX_RECORD_MS
 const CHUNK_INTERVAL_MS = 250
 
 const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
-  const { onRecorded, onStartRecording, autoListen, onAutoListenSilence, onAudioChunk, onStreamStart, onStreamEnd } = props
+  const {
+    onRecorded,
+    onStartRecording,
+    autoListen,
+    onAutoListenSilence,
+    onAudioChunk,
+    onStreamStart,
+    onStreamEnd,
+    onStreamDiscard,
+  } = props
 
   const [state, setState] = useState('idle') // idle | recording | processing
   const mediaRecorderRef = useRef(null)
@@ -31,7 +40,16 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
 
   // Stable refs for props (avoids stale closures in async / RAF callbacks)
   const propsRef = useRef({})
-  propsRef.current = { onRecorded, onStartRecording, autoListen, onAutoListenSilence, onAudioChunk, onStreamStart, onStreamEnd }
+  propsRef.current = {
+    onRecorded,
+    onStartRecording,
+    autoListen,
+    onAutoListenSilence,
+    onAudioChunk,
+    onStreamStart,
+    onStreamEnd,
+    onStreamDiscard,
+  }
 
   // Silence-detection refs
   const silenceStartRef = useRef(null)
@@ -104,9 +122,15 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
         stream.getTracks().forEach((t) => t.stop())
         streamRef.current = null
         if (analyserCtxRef.current?.audioCtx) analyserCtxRef.current.audioCtx.close()
+        analyserCtxRef.current = null
         if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+        mediaRecorderRef.current = null
 
         if (propsRef.current.autoListen && !speechDetectedRef.current) {
+          if (streamActiveRef.current && propsRef.current.onStreamDiscard) {
+            propsRef.current.onStreamDiscard()
+          }
+          streamActiveRef.current = false
           setState('idle')
           if (propsRef.current.onAutoListenSilence) propsRef.current.onAutoListenSilence()
           return
@@ -117,6 +141,7 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
         }
 
         if (streamActiveRef.current) {
+          streamActiveRef.current = false
           setState('idle')
           return
         }
@@ -190,6 +215,7 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
       if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop())
+      if (analyserCtxRef.current?.audioCtx) analyserCtxRef.current.audioCtx.close()
     }
   }, [])
 

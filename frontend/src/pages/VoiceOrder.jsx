@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { submitTextOrder, transcribeAudio, confirmOrder, getMenuMatrix, getTrends } from '../api/client'
+import { submitTextOrder, transcribeAudio, confirmOrder, getMenuMatrix, getTrends, speakText } from '../api/client'
 import useVoiceStream from '../api/useVoiceStream'
 import VoiceRecorder from '../components/VoiceRecorder'
 import OrderSummary from '../components/OrderSummary'
@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'motion/react'
 import { StaggerReveal, staggerContainer, staggerItem } from '../utils/animations'
 import { Trash2, ShoppingCart, ClipboardList, CheckCircle } from 'lucide-react'
 import { buildUpsellCandidates } from '../utils/revenueInsights'
+import { playAudioWithFallback, stopBrowserSpeech } from '../utils/ttsPlayback'
 import { VOICE_AUTO_LISTEN_DELAY_MS } from '../config'
 import { useTranslation } from '../context/LanguageContext'
 
@@ -22,6 +23,31 @@ function getRestaurantId() {
   } catch {
     return null
   }
+}
+
+const SILENCE_REPROMPT_LIMIT = 2
+
+const SILENCE_FOLLOW_UP = {
+  en: {
+    withCart: 'I did not hear anything. Would you like to add anything else, or should I place the order?',
+    noCart: 'I did not hear anything. What would you like to order?',
+  },
+  hi: {
+    withCart: 'Mujhe kuch sunai nahi diya. Aur kuch add karna hai, ya main order place kar doon?',
+    noCart: 'Mujhe kuch sunai nahi diya. Aap kya order karna chahenge?',
+  },
+  gu: {
+    withCart: 'મને કંઈ સંભળાયું નહીં. બીજું કંઈ ઉમેરવું છે કે હું ઓર્ડર મૂકી દઉં?',
+    noCart: 'મને કંઈ સંભળાયું નહીં. તમે શું ઓર્ડર કરશો?',
+  },
+  mr: {
+    withCart: 'मला काही ऐकू आलं नाही. अजून काही जोडायचं आहे का, की मी ऑर्डर लावू?',
+    noCart: 'मला काही ऐकू आलं नाही. तुम्हाला काय ऑर्डर करायचं आहे?',
+  },
+  kn: {
+    withCart: 'ನನಗೆ ಏನೂ ಕೇಳಿಸಲಿಲ್ಲ. ಇನ್ನೇನಾದರೂ ಸೇರಿಸಬೇಕೇ, ಇಲ್ಲವೇ ನಾನು order ಮಾಡಲೇ?',
+    noCart: 'ನನಗೆ ಏನೂ ಕೇಳಿಸಲಿಲ್ಲ. ನೀವು ಏನು order ಮಾಡುತ್ತೀರಿ?',
+  },
 }
 
 export default function VoiceOrder() {
@@ -43,37 +69,31 @@ export default function VoiceOrder() {
   const autoListenRef = useRef(true)
   const lastIntentRef = useRef(null)
   const sendInterruptRef = useRef(() => {})
+  const silenceRepromptCountRef = useRef(0)
   const restaurantId = getRestaurantId()
 
   // ── TTS Audio Playback ──
-  const playTTSAudio = useCallback((base64Audio) => {
-    if (!base64Audio) return
-
+  const playVoiceResponse = useCallback((base64Audio, spokenText = null, language = 'en') => {
     if (currentAudioRef.current) {
       currentAudioRef.current.pause()
       currentAudioRef.current.src = ''
+      currentAudioRef.current = null
     }
 
-    const bytes = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0))
-    const blob = new Blob([bytes], { type: 'audio/mp3' })
-    const url = URL.createObjectURL(blob)
-    const audio = new Audio(url)
-    currentAudioRef.current = audio
-
-    audio.onended = () => {
-      URL.revokeObjectURL(url)
-      setIsSpeaking(false)
-      // Auto-listen: restart recording after TTS finishes (skip after CONFIRM)
-      if (autoListenRef.current && lastIntentRef.current !== 'CONFIRM') {
-        setTimeout(() => recorderRef.current?.startRecording(), VOICE_AUTO_LISTEN_DELAY_MS)
-      }
-    }
-    audio.onerror = () => {
-      URL.revokeObjectURL(url)
-      setIsSpeaking(false)
-    }
-    setIsSpeaking(true)
-    audio.play().catch(() => setIsSpeaking(false))
+    playAudioWithFallback({
+      base64Audio,
+      text: spokenText,
+      language,
+      currentAudioRef,
+      onStart: () => setIsSpeaking(true),
+      onEnd: () => {
+        setIsSpeaking(false)
+        if (autoListenRef.current && lastIntentRef.current !== 'CONFIRM') {
+          setTimeout(() => recorderRef.current?.startRecording(), VOICE_AUTO_LISTEN_DELAY_MS)
+        }
+      },
+      onError: () => setIsSpeaking(false),
+    })
   }, [])
 
   // ── Stop TTS when user starts recording ──
@@ -81,14 +101,17 @@ export default function VoiceOrder() {
     if (currentAudioRef.current) {
       currentAudioRef.current.pause()
       currentAudioRef.current.src = ''
-      setIsSpeaking(false)
+      currentAudioRef.current = null
     }
+    stopBrowserSpeech()
+    setIsSpeaking(false)
     sendInterruptRef.current()
   }, [])
 
   // ── Process result and show feedback ──
   const processResult = useCallback((data) => {
     setResult(data)
+    silenceRepromptCountRef.current = 0
 
     // Track last intent for auto-listen decisions
     lastIntentRef.current = data.intent
@@ -123,13 +146,19 @@ export default function VoiceOrder() {
     }
 
     // Auto-play TTS response
-    if (data.tts_audio_b64) playTTSAudio(data.tts_audio_b64)
+    if (data.tts_audio_b64 || data.tts_text) {
+      playVoiceResponse(
+        data.tts_audio_b64,
+        data.tts_text,
+        data.tts_language || data.detected_language || (selectedLanguage !== 'auto' ? selectedLanguage : 'en'),
+      )
+    }
 
     // Auto-confirm if voice said "confirm" and cart has items
     if (intent === 'CONFIRM' && data.session_items?.length > 0) {
       handleVoiceConfirm(data)
     }
-  }, [playTTSAudio, autoListenEnabled])
+  }, [playVoiceResponse, autoListenEnabled, selectedLanguage])
 
   const {
     connect,
@@ -149,8 +178,12 @@ export default function VoiceOrder() {
       setError(null)
       processResult(data)
     },
-    onTTSChunk: (audioB64) => {
-      playTTSAudio(audioB64)
+    onTTSChunk: (audioB64, payload) => {
+      playVoiceResponse(
+        audioB64,
+        payload?.spoken_text,
+        payload?.language || (selectedLanguage !== 'auto' ? selectedLanguage : 'en'),
+      )
     },
     onError: (detail) => {
       setLoading(false)
@@ -200,6 +233,10 @@ export default function VoiceOrder() {
   const handleStreamEnd = useCallback(() => {
     sendEnd()
   }, [sendEnd])
+
+  const handleStreamDiscard = useCallback(() => {
+    sendInterrupt()
+  }, [sendInterrupt])
 
   // ── Remove item via UI button ──
   const handleRemoveItem = async (itemName) => {
@@ -268,6 +305,7 @@ export default function VoiceOrder() {
     setError(null)
     setTextInput('')
     setActionFeedback(null)
+    silenceRepromptCountRef.current = 0
     sessionId.current = generateSessionId()
   }
 
@@ -321,6 +359,36 @@ export default function VoiceOrder() {
   // Effective order for display (use session_order which covers all turns)
   const effectiveOrder = result?.session_order || result?.order
   const liveTranscript = partialTranscript || finalTranscript || ''
+
+  const activeConversationLanguage = useMemo(() => {
+    const candidate = result?.tts_language || result?.detected_language
+    if (candidate && SILENCE_FOLLOW_UP[candidate]) return candidate
+    if (selectedLanguage !== 'auto' && SILENCE_FOLLOW_UP[selectedLanguage]) return selectedLanguage
+    return 'en'
+  }, [result, selectedLanguage])
+
+  const speakAgentPrompt = useCallback(async (text, language) => {
+    try {
+      const tts = await speakText(text, language)
+      playVoiceResponse(tts?.audio_b64, tts?.text || text, language)
+    } catch {
+      playVoiceResponse(null, text, language)
+    }
+  }, [playVoiceResponse])
+
+  const autoListenSilenceHandler = useCallback(() => {
+    if (!autoListenRef.current) return
+    if (silenceRepromptCountRef.current >= SILENCE_REPROMPT_LIMIT) return
+
+    const lang = activeConversationLanguage
+    const prompt = hasCart
+      ? SILENCE_FOLLOW_UP[lang].withCart
+      : SILENCE_FOLLOW_UP[lang].noCart
+
+    silenceRepromptCountRef.current += 1
+    setActionFeedback({ type: 'info', message: prompt })
+    speakAgentPrompt(prompt, lang)
+  }, [activeConversationLanguage, hasCart, speakAgentPrompt])
 
   // Determine step: 1=Listen, 2=Review (with continued input)
   const step = result ? 2 : 1
@@ -459,10 +527,11 @@ export default function VoiceOrder() {
                 onRecorded={handleAudioRecorded}
                 onStartRecording={handleInterruptAudio}
                 autoListen={autoListenEnabled}
-                onAutoListenSilence={handleAutoListenSilence}
+                onAutoListenSilence={autoListenSilenceHandler}
                 onAudioChunk={sendAudioChunk}
                 onStreamStart={handleStreamStart}
                 onStreamEnd={handleStreamEnd}
+                onStreamDiscard={handleStreamDiscard}
               />
               {/* Live transcript indicator while processing */}
               <AnimatePresence>

@@ -345,6 +345,7 @@ export const settleTable = async (tableId, payload = {}) => {
   try {
     const data = await api.post(`/ops/tables/${tableId}/settle`, payload).then(r => r.data)
     invalidateCacheByPrefix('/ops/tables')
+    invalidateCacheByPrefix('/ops/orders?')
     return data
   } catch (error) {
     console.error('API Error:', error?.response?.data || error.message)

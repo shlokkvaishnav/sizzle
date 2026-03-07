@@ -176,6 +176,8 @@ class Order(Base):
     table_number = Column(String(10))  # kept for backward compat / quick display
     table_id = Column(Integer, ForeignKey("restaurant_tables.id"), nullable=True)
     source = Column(String(20), default="voice")  # voice | manual
+    settled_at = Column(DateTime(timezone=True), nullable=True)  # when bill was settled (table settle)
+    payment_method = Column(String(20), nullable=True)  # cash | card | upi (set on settle)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 

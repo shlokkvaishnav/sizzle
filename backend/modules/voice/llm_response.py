@@ -1,46 +1,35 @@
 """
-llm_response.py — LLM-Powered Natural Response Generator
-============================================================
-Decides whether to use Qwen2.5:7B (via Ollama) for natural phrasing
-or fall back to language-specific templates. Always returns speakable
-text — never raises.
+llm_response.py - LLM-powered natural response generator.
 
-Usage:
-    from modules.voice.llm_response import llm_generator
-    spoken = await llm_generator.get_response_text(pipeline_result, "hi")
+Decides whether to use the local LLM for phrasing or fall back to
+language-specific templates. Always returns speakable text and never raises.
 """
 
 import logging
+
 import httpx
 
 from .voice_config import cfg
 
 logger = logging.getLogger("petpooja.voice.llm_response")
 
-# ── System prompt for Qwen2.5:7B ─────────────────────────────────
+SUPPORTED_LANGS = {"en", "hi", "gu", "mr", "kn"}
+
 SYSTEM_PROMPT = (
     "You are Sizzle, the voice of an AI restaurant ordering assistant in India. "
-    "Your job is to generate spoken response text that will be converted to audio by a TTS engine.\n\n"
-    "STRICT RULES — violating these breaks the system:\n"
-    "1. Maximum 2 sentences. Hard limit: 25 words total. TTS clips longer responses.\n"
-    "2. Match the customer's detected language exactly:\n"
-    '   - "en"  → English\n'
-    '   - "hi"  → Hinglish (romanized Hindi mixed with English food terms)\n'
-    '   - "gu"  → Gujarati\n'
-    '   - "mr"  → Marathi\n'
-    '   - "kn"  → Kannada\n'
-    "3. Never use symbols: no ₹, no ×, no %, no /. Write everything as spoken words.\n"
-    "4. Never invent information. Use only what is in the provided order data.\n"
-    "5. For 5+ items: summarize by count and category. Do not list all item names.\n"
-    '   BAD:  "Added dal makhani, butter naan, coke, lassi, and gulab jamun."\n'
-    '   GOOD: "Five items added — mains, bread, drinks, and a dessert. Kuch aur chahiye?"\n'
-    "6. For upsells: sound like a genuine helpful suggestion, not a sales pitch.\n"
-    "7. Output ONLY the spoken text. No JSON. No explanation. No quotation marks."
+    "Generate spoken response text that sounds like a polite live phone-ordering agent.\n\n"
+    "Rules:\n"
+    "1. Maximum 2 sentences and 25 words total.\n"
+    "2. Match the customer's language exactly.\n"
+    "3. Use only the order data provided. Do not invent facts.\n"
+    "4. Sound warm and concise, like an order-taking agent, not a robot.\n"
+    "5. For 5 or more items, summarize naturally instead of listing every item.\n"
+    "6. Output only the spoken text, with no JSON or explanation."
 )
 
 
 class LLMResponseGenerator:
-    """Singleton that generates natural spoken text from pipeline results."""
+    """Singleton generator for spoken agent responses."""
 
     _instance = None
 
@@ -49,40 +38,23 @@ class LLMResponseGenerator:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    # ── Decision Logic ────────────────────────────────────────────
-
     def should_use_llm(self, pipeline_result: dict) -> bool:
-        """Determine if LLM should be called instead of using a template.
-
-        Returns True when templates would produce unnatural output:
-        - 5+ matched items (too long to list by name)
-        - QUERY intent (customer asking about a dish)
-
-        IMPORTANT: For speed, we default to templates for most cases.
-        LLM is only used when templates literally cannot handle it.
-        """
+        """Use the LLM only when templates would sound limited."""
         if not cfg.LLM_ENABLED:
             return False
 
         items = pipeline_result.get("items", [])
-        intent = pipeline_result.get("intent", "")
 
-        # 5+ items — too many to list naturally
+        # Only call the LLM for large orders where listing items individually
+        # would sound robotic. For QUERY intent we use templates — the LLM
+        # is too slow (1.5s timeout) and often hallucinates menu details
+        # it doesn't actually have in context.
         if len(items) >= cfg.LLM_MIN_ITEMS_FOR_SUMMARY:
             return True
-
-        # Customer asking about a dish — needs descriptive answer
-        if intent == "QUERY":
-            return True
-
-        # Everything else: use fast templates (upsell, disambiguation, etc.)
         return False
 
-    # ── LLM Call ──────────────────────────────────────────────────
-
     async def generate(self, pipeline_result: dict, detected_language: str) -> str:
-        """Call Qwen2.5:7B via Ollama for natural phrasing.
-        Falls back to template on any error or timeout."""
+        """Call the local LLM and fall back to templates on failure."""
         try:
             user_prompt = self._build_user_prompt(pipeline_result, detected_language)
 
@@ -101,31 +73,24 @@ class LLMResponseGenerator:
                     },
                 )
                 resp.raise_for_status()
-                text = resp.json().get("response", "").strip()
-
+                text = resp.json().get("response", "").strip().strip("\"'")
                 if text:
-                    # Strip quotation marks the LLM sometimes wraps output in
-                    text = text.strip('"\'')
                     return text
-
         except httpx.TimeoutException:
-            logger.info("LLM timed out (%.1fs) — using template", cfg.LLM_TIMEOUT_SEC)
-        except Exception as e:
-            logger.warning(f"LLM call failed: {e} — using template")
+            logger.info("LLM timed out (%.1fs) - using template", cfg.LLM_TIMEOUT_SEC)
+        except Exception as exc:
+            logger.warning("LLM call failed: %s - using template", exc)
 
         return self._fallback_template(pipeline_result, detected_language)
 
-    # ── Prompt Builder ────────────────────────────────────────────
-
     def _build_user_prompt(self, pipeline_result: dict, detected_language: str) -> str:
-        """Construct the user prompt from pipeline result data."""
+        """Construct a compact prompt from the pipeline result."""
         items = pipeline_result.get("items", [])
         intent = pipeline_result.get("intent", "UNCLEAR")
         upsells = pipeline_result.get("upsell_suggestions", [])
         disambiguation = pipeline_result.get("disambiguation", [])
         order = pipeline_result.get("order")
 
-        # Determine situation
         if len(items) >= cfg.LLM_MIN_ITEMS_FOR_SUMMARY:
             situation = "complex_order_echo"
         elif upsells:
@@ -135,64 +100,75 @@ class LLMResponseGenerator:
         elif len(disambiguation) >= 3:
             situation = "ambiguous_multi_option"
         else:
-            situation = "partial_order_with_unrecognized"
+            situation = "standard_order_turn"
 
-        # Build item summary
-        item_parts = []
-        for item in items:
-            name = item.get("item_name", "unknown")
-            qty = item.get("quantity", 1)
-            item_parts.append(f"{qty} {name}")
-        item_summary = ", ".join(item_parts) if item_parts else "no items matched"
+        item_summary = ", ".join(
+            f"{item.get('quantity', 1)} {item.get('item_name', 'unknown')}"
+            for item in items
+        ) or "no items matched"
 
-        # Extra context
         extra = []
         if upsells:
             upsell_names = [u.get("name") or u.get("suggestion_text", "") for u in upsells]
-            extra.append(f"Upsell suggestions: {', '.join(upsell_names)}")
+            extra.append(f"upsells: {', '.join(upsell_names)}")
         if disambiguation:
-            for d in disambiguation:
-                alts = [a.get("item_name", "") for a in d.get("alternatives", [])]
-                extra.append(f"Ambiguous: '{d.get('item_name')}' — options: {', '.join(alts)}")
+            for entry in disambiguation:
+                alts = [alt.get("item_name", "") for alt in entry.get("alternatives", [])]
+                extra.append(f"ambiguous {entry.get('item_name', '')}: {', '.join(alts)}")
         if order and order.get("subtotal"):
-            extra.append(f"Subtotal: {order['subtotal']} rupees")
+            extra.append(f"subtotal: {order['subtotal']} rupees")
 
         extra_context = "; ".join(extra) if extra else "none"
-
         return (
             f"Situation: {situation}\n"
             f"Order data: {item_summary}\n"
             f"Customer language: {detected_language}\n"
             f"Context: {extra_context}\n"
-            f"Generate the spoken response:"
+            "Generate the spoken response:"
         )
 
-    # ── Template Fallbacks ────────────────────────────────────────
-
     def _fallback_template(self, pipeline_result: dict, lang: str) -> str:
-        """Generate a template-based response. Always returns something."""
+        """Template fallback that always returns a valid spoken response."""
         items = pipeline_result.get("items", [])
+        all_items_raw = items   # keep reference for variant check below
         intent = pipeline_result.get("intent", "UNCLEAR")
         order = pipeline_result.get("order")
         disambiguation = pipeline_result.get("disambiguation", [])
         stage_results = pipeline_result.get("stage_results", [])
+        has_session_items = bool(pipeline_result.get("session_items"))
 
-        # Check for specific error types
+
         for sr in stage_results:
             err = sr.get("error_type")
             if err == "no_speech_detected":
-                return self._t_no_speech(lang)
+                return self._t_no_speech(lang, has_session_items)
             if err == "audio_too_short":
                 return self._t_audio_short(lang)
 
-        if intent == "DONE":
-            session_items = pipeline_result.get("session_items", [])
-            if session_items:
-                return self._t_done(lang)
-            else:
-                return self._t_done_empty(lang)
+        # ── Variant clarification check (must run BEFORE intent handling) ──
+        # When user said an ambiguous single word (e.g. "biryani") that matched
+        # multiple distinct menu items, the item has needs_disambiguation=True +
+        # variant_query set. We intercept here BEFORE the ORDER block returns
+        # "I've added Chicken Biryani" with the wrong auto-pick.
+        variant_items = [
+            item for item in all_items_raw
+            if item.get("needs_disambiguation") and item.get("variant_query")
+        ]
+        if variant_items:
+            vi = variant_items[0]
+            query = vi.get("variant_query", vi.get("item_name", "that item"))
+            alts = [vi] + vi.get("alternatives", [])   # current best + alternatives
+            return self._t_variant_clarification(lang, query, alts)
 
-        # Intent-based templates
+        if intent == "DONE":
+            # Before asking to confirm — check if dessert/beverage upsell is needed
+            dessert_bev = pipeline_result.get("dessert_beverage_upsell", [])
+            if dessert_bev and has_session_items:
+                return self._t_dessert_beverage_upsell(lang, dessert_bev)
+            if has_session_items:
+                return self._t_done(lang)
+            return self._t_done_empty(lang)
+
         if intent == "ORDER":
             if len(items) == 0:
                 return self._t_no_match(lang)
@@ -202,16 +178,12 @@ class LLMResponseGenerator:
 
         if intent == "CANCEL":
             if not items:
-                # No specific items → check if cart was cleared
-                session_items = pipeline_result.get("session_items", [])
-                if not session_items:
+                if not has_session_items:
                     return self._t_cancel_all(lang)
-                else:
-                    return self._t_cancel_clarify(lang)
+                return self._t_cancel_clarify(lang)
             if len(items) == 1:
                 return self._t_cancel(lang, items[0]["item_name"])
-            names = ", ".join(i["item_name"] for i in items)
-            return self._t_cancel(lang, names)
+            return self._t_cancel(lang, ", ".join(item["item_name"] for item in items))
 
         if intent == "MODIFY":
             if items:
@@ -222,103 +194,103 @@ class LLMResponseGenerator:
             return self._t_modify(lang, "the item", "as requested")
 
         if intent == "CONFIRM":
-            # Use session_order (accumulated cart) — order is only current turn's items
             session_order = pipeline_result.get("session_order")
             confirm_order = session_order or order
             total = 0
             if confirm_order:
                 total = confirm_order.get("total") or confirm_order.get("subtotal") or 0
-            # Robust fallback: compute from session_items if total is still 0
-            if not total:
-                session_items = pipeline_result.get("session_items", [])
-                if session_items:
-                    total = sum(
-                        i.get("line_total", 0)
-                        or (i.get("unit_price", 0) * i.get("quantity", 1))
-                        for i in session_items
-                    )
+            if not total and has_session_items:
+                total = sum(
+                    item.get("line_total", 0)
+                    or (item.get("unit_price", 0) * item.get("quantity", 1))
+                    for item in pipeline_result.get("session_items", [])
+                )
             return self._t_confirm(lang, total)
 
-        # Disambiguation
+        if intent == "QUERY":
+            # Use the LLM's actual answer if available
+            query_answer = pipeline_result.get("query_answer")
+            if query_answer:
+                return query_answer
+            return self._t_query(lang)
+
         if disambiguation and len(disambiguation) <= 2:
-            d = disambiguation[0]
-            alts = d.get("alternatives", [])
+            entry = disambiguation[0]
+            alts = entry.get("alternatives", [])
             if alts:
-                opt_a = d.get("item_name", "option 1")
-                opt_b = alts[0].get("item_name", "option 2")
-                return self._t_disambiguation(lang, opt_a, opt_b)
+                return self._t_disambiguation(
+                    lang,
+                    entry.get("item_name", "option one"),
+                    alts[0].get("item_name", "option two"),
+                )
 
-        # Fallback
-        return self._t_no_speech(lang)
+        return self._t_no_speech(lang, has_session_items)
 
-    # ── Template Strings per Language ─────────────────────────────
 
     @staticmethod
     def _t_order(lang: str, items: list) -> str:
-        names = ", ".join(
-            f"{i.get('quantity', 1)} {i.get('item_name', '')}" for i in items
-        )
+        names = ", ".join(f"{item.get('quantity', 1)} {item.get('item_name', '')}" for item in items)
         templates = {
-            "en": f"Got it! {names}. Anything else?",
-            "hi": f"Ji haan! {names} add kar diya. Aur kuch chahiye?",
-            "gu": f"{names} ઉમેરી દીધું. બીજું કંઈ જોઈએ?",
-            "mr": f"{names} जोडले. आणखी काही हवे का?",
-            "kn": f"{names} ಸೇರಿಸಲಾಗಿದೆ. ಇನ್ನೇನಾದರೂ ಬೇಕೇ?",
+            "en": f"Sure, I've added {names}. Would you like anything else?",
+            "hi": f"Theek hai, maine {names} add kar diya. Aur kuch chahiye?",
+            "gu": f"ઠીક છે, મેં {names} ઉમેર્યા. બીજું કંઈ જોઈએ?",
+            "mr": f"ठीक आहे, मी {names} जोडले. अजून काही हवे का?",
+            "kn": f"ಸರಿ, ನಾನು {names} ಸೇರಿಸಿದ್ದೇನೆ. ಇನ್ನೇನಾದರೂ ಬೇಕೇ?",
         }
         return templates.get(lang, templates["en"])
 
     @staticmethod
     def _t_order_many(lang: str, count: int) -> str:
         templates = {
-            "en": f"Perfect, {count} items added to your order.",
-            "hi": f"{count} cheezein cart mein add ho gayi.",
-            "gu": f"{count} વસ્તુઓ ઉમેરાઈ. બીજું કંઈ જોઈએ?",
-            "mr": f"{count} वस्तू जोडल्या. आणखी काही?",
-            "kn": f"{count} ವಸ್ತುಗಳನ್ನು ಸೇರಿಸಲಾಗಿದೆ.",
+            "en": f"Sure, I've added {count} items to your order. Would you like anything else?",
+            "hi": f"Theek hai, maine {count} items add kar diye hain. Aur kuch chahiye?",
+            "gu": f"ઠીક છે, મેં {count} વસ્તુઓ ઉમેર્યાં છે. બીજું કંઈ જોઈએ?",
+            "mr": f"ठीक आहे, मी {count} वस्तू जोडल्या आहेत. अजून काही हवे का?",
+            "kn": f"ಸರಿ, ನಾನು {count} items ಸೇರಿಸಿದ್ದೇನೆ. ಇನ್ನೇನಾದರೂ ಬೇಕೇ?",
         }
         return templates.get(lang, templates["en"])
 
     @staticmethod
     def _t_cancel(lang: str, item_name: str) -> str:
         templates = {
-            "en": f"Done, removed {item_name}. Anything else?",
-            "hi": f"{item_name} hata diya. Aur kuch badalna hai?",
-            "gu": f"{item_name} દૂર કર્યું. બીજું કંઈ જોઈએ?",
-            "mr": f"{item_name} कढले. आणखी काही हवे का?",
-            "kn": f"{item_name} ತೆಗೆದುಹಾಕಲಾಗಿದೆ. ಇನ್ನೇನಾದರೂ ಬೇಕೇ?",
+            "en": f"Sure, I've removed {item_name}. Would you like anything else?",
+            "hi": f"Theek hai, maine {item_name} hata diya. Aur kuch badalna hai?",
+            "gu": f"ઠીક છે, મેં {item_name} દૂર કર્યું. બીજું કંઈ જોઈએ?",
+            "mr": f"ठीक आहे, मी {item_name} काढले. अजून काही हवे का?",
+            "kn": f"ಸರಿ, ನಾನು {item_name} ತೆಗೆದೆ. ಇನ್ನೇನಾದರೂ ಬೇಕೇ?",
         }
         return templates.get(lang, templates["en"])
 
     @staticmethod
     def _t_cancel_all(lang: str) -> str:
         templates = {
-            "en": "Order cleared. Would you like to start fresh?",
-            "hi": "Order clear ho gaya. Naya order shuru karein?",
-            "gu": "ઓર્ડર ક્લિયર થઈ ગયું. ફરીથી શરૂ કરશો?",
-            "mr": "ऑर्डर क्लियर केले. पुन्हा सुरू करायचे का?",
-            "kn": "ಆರ್ಡರ್ ಕ್ಲಿಯರ್ ಆಯಿತು. ಹೊಸದಾಗಿ ಶುರು ಮಾಡೋಣ?",
+            "en": "Your order is cleared. Would you like to start again?",
+            "hi": "Aapka order clear ho gaya. Naya order shuru karein?",
+            "gu": "તમારો ઓર્ડર ક્લિયર થઈ ગયો. ફરીથી શરૂ કરવું છે?",
+            "mr": "तुमचा ऑर्डर क्लिअर झाला. पुन्हा सुरू करायचं का?",
+            "kn": "ನಿಮ್ಮ ಆರ್ಡರ್ ಕ್ಲಿಯರ್ ಆಗಿದೆ. ಮತ್ತೆ ಶುರು ಮಾಡಲಾ?",
         }
         return templates.get(lang, templates["en"])
 
     @staticmethod
     def _t_cancel_clarify(lang: str) -> str:
         templates = {
-            "en": "Which item should I remove? Say the item name.",
-            "hi": "Kaunsa item hatana hai? Item ka naam bolein.",
-            "gu": "કયું આઇટમ દૂર કરવું છે? આઇટમનું નામ બોલો.",
-            "mr": "कोणते आयटम काढायचे? आयटमचे नाव सांगा.",
-            "kn": "ಯಾವ ಐಟಂ ತೆಗೆದುಹಾಕಬೇಕು? ಐಟಂ ಹೆಸರು ಹೇಳಿ.",
+            "en": "Which item should I remove? Please say the item name.",
+            "hi": "Kaunsa item hatana hai? Please item ka naam boliye.",
+            "gu": "કયું item દૂર કરવું છે? કૃપા કરીને item નું નામ કહો.",
+            "mr": "कोणते item काढायचे? कृपया item चे नाव सांगा.",
+            "kn": "ಯಾವ item ತೆಗೆದುಹಾಕಬೇಕು? ದಯವಿಟ್ಟು item ಹೆಸರು ಹೇಳಿ.",
         }
         return templates.get(lang, templates["en"])
 
     @staticmethod
     def _t_modify(lang: str, item_name: str, modifier: str) -> str:
         templates = {
-            "en": f"Updated — {item_name} will be {modifier}.",
-            "hi": f"{item_name} {modifier} kar diya.",
-            "gu": f"{item_name} {modifier} કર્યું.",
-            "mr": f"{item_name} {modifier} केले.",
-            "kn": f"{item_name} {modifier} ಮಾಡಲಾಗಿದೆ.",
+            "en": f"Sure, I've updated {item_name} to be {modifier}. Anything else?",
+            "hi": f"Theek hai, maine {item_name} ko {modifier} kar diya. Aur kuch?",
+            "gu": f"ઠીક છે, મેં {item_name} ને {modifier} કર્યું. બીજું કંઈ?",
+            "mr": f"ठीक आहे, मी {item_name} ला {modifier} केले. अजून काही?",
+            "kn": f"ಸರಿ, ನಾನು {item_name} ಅನ್ನು {modifier} ಮಾಡಿದ್ದೇನೆ. ಇನ್ನೇನಾದರೂ ಬೇಕೇ?",
         }
         return templates.get(lang, templates["en"])
 
@@ -326,11 +298,22 @@ class LLMResponseGenerator:
     def _t_confirm(lang: str, total: float) -> str:
         total_str = str(int(total)) if total == int(total) else str(total)
         templates = {
-            "en": f"Order confirmed! Total is {total_str} rupees. Sent to kitchen.",
-            "hi": f"Order confirm ho gaya! Total {total_str} rupees. Kitchen ko bhej diya.",
-            "gu": f"ઓર્ડર કન્ફર્મ! કુલ {total_str} રૂપિયા. રસોડામાં મોકલ્યું.",
-            "mr": f"ऑर्डर कन्फर्म! एकूण {total_str} रुपये. स्वयंपाकघरात पाठवले.",
-            "kn": f"ಆರ್ಡರ್ ದೃಢಪಡಿಸಲಾಗಿದೆ! ಒಟ್ಟು {total_str} ರೂಪಾಯಿ. ಅಡುಗೆಮನೆಗೆ ಕಳುಹಿಸಲಾಗಿದೆ.",
+            "en": f"Your order is confirmed. Total is {total_str} rupees, and I've sent it to the kitchen.",
+            "hi": f"Aapka order confirm ho gaya. Total {total_str} rupees hai, aur maine kitchen ko bhej diya.",
+            "gu": f"તમારો ઓર્ડર કન્ફર્મ થયો. કુલ {total_str} રૂપિયા છે અને મેં kitchen માં મોકલી દીધો.",
+            "mr": f"तुमचा ऑर्डर confirm झाला. एकूण {total_str} रुपये आहेत आणि मी kitchen मध्ये पाठवला आहे.",
+            "kn": f"ನಿಮ್ಮ order confirm ಆಗಿದೆ. ಒಟ್ಟು {total_str} rupees, ಮತ್ತು ನಾನು kitchen ಗೆ ಕಳಿಸಿದ್ದೇನೆ.",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_query(lang: str) -> str:
+        templates = {
+            "en": "I can take your order! Just tell me what you'd like to have and I'll add it.",
+            "hi": "Main aapka order le sakta hoon! Bas bataiye kya khana chahenge.",
+            "gu": "હું તમારો ઓર્ડર લઈ શકું! બસ કહો તમને શું જોઈએ.",
+            "mr": "मी तुमचा ऑर्डर घेऊ शकतो! फक्त सांगा काय हवे आहे.",
+            "kn": "ನಾನು ನಿಮ್ಮ order ತೆಗೆದುಕೊಳ್ಳಬಲ್ಲೆ! ಏನು ಬೇಕು ಎಂದು ಹೇಳಿ.",
         }
         return templates.get(lang, templates["en"])
 
@@ -338,92 +321,166 @@ class LLMResponseGenerator:
     def _t_disambiguation(lang: str, opt_a: str, opt_b: str) -> str:
         templates = {
             "en": f"Did you mean {opt_a} or {opt_b}?",
-            "hi": f"{opt_a} chahiye ya {opt_b}?",
-            "gu": f"{opt_a} જોઈએ છે કે {opt_b}?",
-            "mr": f"{opt_a} हवे की {opt_b}?",
-            "kn": f"{opt_a} ಬೇಕೇ ಅಥವಾ {opt_b}?",
+            "hi": f"Aapko {opt_a} chahiye ya {opt_b}?",
+            "gu": f"તમને {opt_a} જોઈએ છે કે {opt_b}?",
+            "mr": f"तुम्हाला {opt_a} हवे आहे की {opt_b}?",
+            "kn": f"ನಿಮಗೆ {opt_a} ಬೇಕೇ ಅಥವಾ {opt_b}?",
         }
         return templates.get(lang, templates["en"])
 
     @staticmethod
-    def _t_no_speech(lang: str) -> str:
+    def _t_no_speech(lang: str, has_session_items: bool = False) -> str:
+        if has_session_items:
+            templates = {
+                "en": "I didn't hear anything. Would you like to add anything else or should I place the order?",
+                "hi": "Mujhe kuch sunai nahi diya. Aur kuch add karna hai ya main order place kar doon?",
+                "gu": "મને કંઈ સંભળાયું નહીં. બીજું કંઈ ઉમેરવું છે કે હું ઓર્ડર મૂકી દઉં?",
+                "mr": "मला काही ऐकू आलं नाही. अजून काही जोडायचं आहे का, की मी ऑर्डर लावू?",
+                "kn": "ನನಗೆ ಏನೂ ಕೇಳಿಸಲಿಲ್ಲ. ಇನ್ನೇನಾದರೂ ಸೇರಿಸಬೇಕೇ, ಇಲ್ಲವೇ ನಾನು order ಮಾಡಲೇ?",
+            }
+            return templates.get(lang, templates["en"])
+
         templates = {
-            "en": "I didn't catch that. Could you speak again?",
-            "hi": "Samajh nahi aaya. Dobara bolein?",
-            "gu": "સમજ ન પડ્યું. ફરીથી બોલો.",
-            "mr": "कळले नाही. पुन्हा सांगा.",
-            "kn": "ಅರ್ಥವಾಗಲಿಲ್ಲ. ಮತ್ತೆ ಹೇಳಿ.",
+            "en": "I didn't hear anything clearly. Please tell me your order once more.",
+            "hi": "Mujhe kuch saaf sunai nahi diya. Kripya apna order phir se boliye.",
+            "gu": "મને સાફ સંભળાયું નહીં. કૃપા કરીને તમારો ઓર્ડર ફરીથી કહો.",
+            "mr": "मला स्पष्ट ऐकू आलं नाही. कृपया तुमचा ऑर्डर पुन्हा सांगा.",
+            "kn": "ನನಗೆ ಸ್ಪಷ್ಟವಾಗಿ ಕೇಳಿಸಲಿಲ್ಲ. ದಯವಿಟ್ಟು ನಿಮ್ಮ order ಮತ್ತೆ ಹೇಳಿ.",
         }
         return templates.get(lang, templates["en"])
 
     @staticmethod
     def _t_audio_short(lang: str) -> str:
         templates = {
-            "en": "That was too short. Please say your full order.",
-            "hi": "Thoda aur bolein, please.",
-            "gu": "થોડું વધુ બોલો.",
-            "mr": "थोडे अधिक बोला.",
-            "kn": "ಸ್ವಲ್ಪ ಹೆಚ್ಚು ಮಾತನಾಡಿ.",
+            "en": "That was too short. Please tell me your order a little more clearly.",
+            "hi": "Woh bahut chhota tha. Kripya apna order thoda aur clearly boliye.",
+            "gu": "એ બહુ ટૂંકો હતો. કૃપા કરીને તમારો ઓર્ડર થોડો વધુ સ્પષ્ટ કહો.",
+            "mr": "ते खूप छोटं होतं. कृपया तुमचा ऑर्डर थोडा अधिक स्पष्ट सांगा.",
+            "kn": "ಅದು ತುಂಬಾ ಚಿಕ್ಕದಾಗಿತ್ತು. ದಯವಿಟ್ಟು ನಿಮ್ಮ order ಸ್ವಲ್ಪ ಸ್ಪಷ್ಟವಾಗಿ ಹೇಳಿ.",
         }
         return templates.get(lang, templates["en"])
 
     @staticmethod
     def _t_done(lang: str) -> str:
         templates = {
-            "en": "Should I place the order now?",
-            "hi": "Kya order place kar doon?",
-            "gu": "\u0a93\u0ab0\u0acd\u0aa1\u0ab0 \u0aae\u0ac2\u0a95\u0ac0 \u0aa6\u0a89\u0a82?",
-            "mr": "\u0911\u0930\u094d\u0921\u0930 \u0932\u093e\u0935\u0942 \u0915\u093e?",
-            "kn": "\u0c86\u0cb0\u0ccd\u0ca1\u0cb0\u0ccd \u0cae\u0cbe\u0ca1\u0cb2\u0cc7?",
+            "en": "Would you like me to place the order now?",
+            "hi": "Kya main order abhi place kar doon?",
+            "gu": "હું હવે ઓર્ડર મૂકી દઉં?",
+            "mr": "मी आता ऑर्डर लावू का?",
+            "kn": "ನಾನು ಈಗ order ಮಾಡಲೇ?",
         }
         return templates.get(lang, templates["en"])
 
     @staticmethod
     def _t_done_empty(lang: str) -> str:
         templates = {
-            "en": "You haven't ordered anything yet. What would you like?",
-            "hi": "Abhi kuch order nahi hua hai. Kya mangna hai?",
-            "gu": "\u0ab9\u0a9c\u0ac1 \u0a95\u0a82\u0a88 \u0a93\u0ab0\u0acd\u0aa1\u0ab0 \u0aa8\u0aa5\u0ac0. \u0ab6\u0ac1\u0a82 \u0a9c\u0acb\u0a88\u0a8f?",
-            "mr": "\u0905\u091c\u0942\u0928 \u0915\u093e\u0939\u0940 \u0911\u0930\u094d\u0921\u0930 \u0928\u093e\u0939\u0940. \u0915\u093e\u092f \u0939\u0935\u0947?",
-            "kn": "\u0c87\u0ca8\u0ccd\u0ca8\u0cc2 \u0caf\u0cbe\u0cb5\u0cc1\u0ca6\u0cc7 \u0c86\u0cb0\u0ccd\u0ca1\u0cb0\u0ccd \u0c87\u0cb2\u0ccd\u0cb2. \u0c8f\u0ca8\u0cc1 \u0cac\u0cc7\u0c95\u0cc1?",
+            "en": "I don't have any items yet. What would you like to order?",
+            "hi": "Abhi mere paas koi item nahi hai. Aap kya order karna chahenge?",
+            "gu": "હજુ મારી પાસે કોઈ item નથી. તમે શું ઓર્ડર કરશો?",
+            "mr": "आत्तापर्यंत माझ्याकडे कोणतंही item नाही. तुम्हाला काय ऑर्डर करायचं आहे?",
+            "kn": "ಇನ್ನೂ ನನ್ನ ಬಳಿ ಯಾವುದೇ item ಇಲ್ಲ. ನೀವು ಏನು order ಮಾಡುತ್ತೀರಿ?",
         }
         return templates.get(lang, templates["en"])
 
     @staticmethod
     def _t_no_match(lang: str) -> str:
         templates = {
-            "en": "I couldn't find that on the menu. Could you try again?",
-            "hi": "Ye menu mein nahi mila. Dobara try karein?",
-            "gu": "મેનુમાં મળ્યું નહીં. ફરી પ્રયત્ન કરો.",
-            "mr": "मेनूमध्ये सापडले नाही. पुन्हा प्रयत्न करा.",
-            "kn": "ಮೆನುವಿನಲ್ಲಿ ಕಂಡುಬರಲಿಲ್ಲ. ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.",
+            "en": "I couldn't find that on the menu. Could you please say it once more?",
+            "hi": "Mujhe woh menu mein nahi mila. Kripya ek baar phir boliye.",
+            "gu": "મને એ menu માં મળ્યું નહીં. કૃપા કરીને એક વાર ફરી કહો.",
+            "mr": "मला ते menu मध्ये सापडलं नाही. कृपया एकदा पुन्हा सांगा.",
+            "kn": "ನನಗೆ ಅದು menu ನಲ್ಲಿ ಸಿಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೊಮ್ಮೆ ಹೇಳಿ.",
         }
         return templates.get(lang, templates["en"])
 
     @staticmethod
     def _t_out_of_stock(lang: str, item_name: str) -> str:
         templates = {
-            "en": f"{item_name} is not available right now. Can I suggest something else?",
-            "hi": f"{item_name} abhi available nahi hai. Kuch aur suggest karoon?",
-            "gu": f"{item_name} હાલમાં ઉપલબ્ધ નથી. બીજું કંઈ સૂચવું?",
-            "mr": f"{item_name} सध्या उपलब्ध नाही. दुसरे काही सुचवू का?",
-            "kn": f"{item_name} ಈಗ ಲಭ್ಯವಿಲ್ಲ. ಬೇರೆ ಏನಾದರೂ ಸೂಚಿಸಲೇ?",
+            "en": f"{item_name} is unavailable right now. Would you like something else instead?",
+            "hi": f"{item_name} abhi available nahi hai. Kya aap kuch aur lena chahenge?",
+            "gu": f"{item_name} હાલ ઉપલબ્ધ નથી. તેની બદલે બીજું કંઈ લેશો?",
+            "mr": f"{item_name} सध्या उपलब्ध नाही. त्याऐवजी दुसरं काही घ्याल का?",
+            "kn": f"{item_name} ಈಗ ಲಭ್ಯವಿಲ್ಲ. ಅದರ ಬದಲು ಇನ್ನೇನಾದರೂ ಬೇಕೇ?",
         }
         return templates.get(lang, templates["en"])
 
-    # ── Public Entry Point ────────────────────────────────────────
+    @staticmethod
+    def _t_variant_clarification(lang: str, query: str, variants: list) -> str:
+        """Ask user to choose between multiple variants of the same item.
+        E.g., 4 types of biryani → 'Which biryani would you like?'
+        """
+        # Build a spoken list: "Chicken Biryani, Veg Biryani, or Prawn Biryani"
+        names = [v.get("item_name") or v.get("matched_as", "") for v in variants if v.get("item_name") or v.get("matched_as")]
+        names = [n for n in names if n][:4]  # cap at 4 to avoid very long sentences
+        if not names:
+            en_list = query
+        elif len(names) == 1:
+            en_list = names[0]
+        else:
+            en_list = ", ".join(names[:-1]) + f", or {names[-1]}"
+
+        templates = {
+            "en": f"Which {query} would you like? We have {en_list}.",
+            "hi": f"Kaunsa {query} chahiye? Hamare paas {en_list} hai.",
+            "gu": f"કયો {query} જોઈએ છે? અમારી પાસે {en_list} છે.",
+            "mr": f"कोणता {query} हवा? आमच्याकडे {en_list} आहे.",
+            "kn": f"ಯಾವ {query} ಬೇಕು? ನಮ್ಮ ಬಳಿ {en_list} ಇದೆ.",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_dessert_beverage_upsell(lang: str, suggestions: list) -> str:
+        """Ask if the customer wants desserts/beverages before placing the order."""
+        # Categorise suggestions into desserts vs beverages
+        dessert_names = []
+        bev_names = []
+        _BEV_KEYS = {"beverage", "beverages", "drinks", "drink", "juice",
+                     "mocktail", "coffee", "tea", "shake", "smoothie", "lassi"}
+        for s in suggestions:
+            cat = (s.get("category") or "").lower()
+            name = s.get("item_name", "")
+            if any(k in cat for k in _BEV_KEYS):
+                bev_names.append(name)
+            else:
+                dessert_names.append(name)
+
+        def _en_list(names):
+            if not names:
+                return ""
+            if len(names) == 1:
+                return names[0]
+            return ", ".join(names[:-1]) + f" or {names[-1]}"
+
+        parts_en = []
+        if dessert_names:
+            parts_en.append(f"desserts like {_en_list(dessert_names)}")
+        if bev_names:
+            parts_en.append(f"drinks like {_en_list(bev_names)}")
+        suggestion_str_en = " and ".join(parts_en) or "something sweet or a drink"
+
+        # For other languages just name the items
+        all_names = [s.get("item_name", "") for s in suggestions]
+        all_str = ", ".join(all_names) or "kuch meetha ya peene ke liye"
+
+        templates = {
+            "en": f"Before I place your order, would you like to add any {suggestion_str_en}?",
+            "hi": f"Order place karne se pehle, kya aap {all_str} mein se kuch add karna chahenge?",
+            "gu": f"Order મૂકતાં પહેલાં, શું {all_str} ઉમેરવું છે?",
+            "mr": f"Order देण्यापूर्वी, {all_str} मधलं काही जोडायचं आहे का?",
+            "kn": f"Order ಮಾಡುವ ಮುನ್ನ, {all_str} ಏನಾದರೂ ಸೇರಿಸಬೇಕೇ?",
+        }
+        return templates.get(lang, templates["en"])
 
     async def get_response_text(self, pipeline_result: dict, detected_language: str) -> str:
-        """Public entry point. Always returns speakable text — never raises."""
-        lang = detected_language if detected_language in ("en", "hi", "gu", "mr", "kn") else "en"
+        """Public entry point. Always returns speakable text."""
+        lang = detected_language if detected_language in SUPPORTED_LANGS else "en"
         try:
             if self.should_use_llm(pipeline_result):
                 return await self.generate(pipeline_result, lang)
             return self._fallback_template(pipeline_result, lang)
-        except Exception as e:
-            logger.warning(f"Response text generation failed: {e}")
-            return self._t_no_speech(lang)
+        except Exception as exc:
+            logger.warning("Response text generation failed: %s", exc)
+            return self._t_no_speech(lang, bool(pipeline_result.get("session_items")))
 
 
-# Module-level singleton
 llm_generator = LLMResponseGenerator()

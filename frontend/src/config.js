@@ -16,11 +16,11 @@ export const MAX_CACHE_ENTRIES = Number(import.meta.env.VITE_CACHE_MAX_ENTRIES |
 
 // Voice Recorder
 export const VOICE_VISUALIZER_BARS = Number(import.meta.env.VITE_VOICE_VISUALIZER_BARS || 48)
-export const VOICE_SPEECH_THRESHOLD = Number(import.meta.env.VITE_VOICE_SPEECH_THRESHOLD || 12)
-export const VOICE_SILENCE_TIMEOUT_MS = Number(import.meta.env.VITE_VOICE_SILENCE_TIMEOUT_MS || 800)
-export const VOICE_MAX_WAIT_NO_SPEECH_MS = Number(import.meta.env.VITE_VOICE_MAX_WAIT_NO_SPEECH_MS || 2500)
+export const VOICE_SPEECH_THRESHOLD = Number(import.meta.env.VITE_VOICE_SPEECH_THRESHOLD || 8)
+export const VOICE_SILENCE_TIMEOUT_MS = Number(import.meta.env.VITE_VOICE_SILENCE_TIMEOUT_MS || 500)
+export const VOICE_MAX_WAIT_NO_SPEECH_MS = Number(import.meta.env.VITE_VOICE_MAX_WAIT_NO_SPEECH_MS || 1500)
 export const VOICE_MAX_RECORD_MS = Number(import.meta.env.VITE_VOICE_MAX_RECORD_MS || 10000)
-export const VOICE_AUTO_LISTEN_DELAY_MS = Number(import.meta.env.VITE_VOICE_AUTO_LISTEN_DELAY_MS || 600)
+export const VOICE_AUTO_LISTEN_DELAY_MS = Number(import.meta.env.VITE_VOICE_AUTO_LISTEN_DELAY_MS || 200)
 
 // Revenue Insights
 export const TARGET_UPSELL_CM = Number(import.meta.env.VITE_TARGET_UPSELL_CM || 65)

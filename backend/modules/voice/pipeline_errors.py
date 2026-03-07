@@ -152,13 +152,18 @@ def zero_item_matches(normalized_text: str, top_suggestions: list) -> StageResul
 
 
 def ambiguous_match(item_name: str, alternatives: list) -> StageResult:
-    alt_names = [a.get("item_name", a.get("matched_as", "?")) for a in alternatives[:3]]
-    option_a = alt_names[0] if alt_names else "?"
-    option_b = alt_names[1] if len(alt_names) > 1 else "something else"
+    alt_names = [a.get("item_name", a.get("matched_as", "?")) for a in alternatives[:4]]
+    if len(alt_names) == 0:
+        msg = f"Did you mean {item_name}? Please confirm."
+    elif len(alt_names) == 1:
+        msg = f"Did you mean {item_name} or {alt_names[0]}?"
+    else:
+        choices = ", ".join(alt_names[:-1]) + f", or {alt_names[-1]}"
+        msg = f"Which one did you want — {item_name}, {choices}?"
     return StageResult(
         status=PARTIAL,
         error_type=ERR_AMBIGUOUS_MATCH,
-        user_message=_get_message(ERR_AMBIGUOUS_MATCH, option_a=option_a, option_b=option_b),
+        user_message=msg,
         data={"matched_item": item_name},
         suggestions=alternatives,
     )

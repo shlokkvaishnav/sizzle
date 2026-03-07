@@ -15,8 +15,12 @@ Model: paraphrase-multilingual-MiniLM-L12-v2 (~420MB)
   - Fully offline after first download
 
 FAISS: vector similarity search, CPU-only, no server needed
+  Cache: embeddings saved to /tmp/petpooja_faiss_cache_<hash>.npz to skip
+  re-encoding on restart when the menu hasn't changed (saves ~800ms).
 """
 
+import hashlib
+import os
 import re
 import logging
 import numpy as np
@@ -102,6 +106,10 @@ class _SemanticIndex:
         """
         Encode all corpus keys and build a FAISS inner-product index.
         corpus: { alias_string: item_id }
+
+        Disk cache: embeddings are saved keyed by SHA256 of the corpus.
+        On next startup with the same menu, we skip sentence-transformer
+        encoding (~800ms saved) and load from cache instead.
         """
         self._load_model()
         if self._model is None:
@@ -112,15 +120,50 @@ class _SemanticIndex:
             self._keys = list(corpus.keys())
             self._ids = [corpus[k] for k in self._keys]
 
-            logger.info("Building semantic index for %d corpus entries...", len(self._keys))
-            embeddings = self._model.encode(
-                self._keys,
-                batch_size=cfg.ITEM_MATCH_ENCODE_BATCH,
-                show_progress_bar=False,
-                convert_to_numpy=True,
-                normalize_embeddings=True,   # L2-normalise → inner product = cosine sim
+            # —— Disk-cache check ———————————————————————————————————————
+            corpus_hash = hashlib.sha256(
+                "|".join(self._keys).encode("utf-8")
+            ).hexdigest()[:16]
+            cache_path = os.path.join(
+                os.environ.get("TEMP", "/tmp"),
+                f"petpooja_faiss_cache_{corpus_hash}.npz",
             )
-            embeddings = embeddings.astype(np.float32)
+
+            embeddings = None
+            if os.path.exists(cache_path):
+                try:
+                    cached = np.load(cache_path, allow_pickle=False)
+                    cached_embed = cached["embeddings"]
+                    # Sanity: shape must match current corpus size
+                    if cached_embed.shape[0] == len(self._keys):
+                        embeddings = cached_embed.astype(np.float32)
+                        logger.info(
+                            "FAISS cache hit (%d entries) — skipped encoding",
+                            len(self._keys),
+                        )
+                    else:
+                        logger.info("FAISS cache size mismatch — re-encoding")
+                except Exception as cache_err:
+                    logger.debug("FAISS cache load failed: %s", cache_err)
+
+            if embeddings is None:
+                logger.info(
+                    "Building semantic index for %d corpus entries...", len(self._keys)
+                )
+                embeddings = self._model.encode(
+                    self._keys,
+                    batch_size=cfg.ITEM_MATCH_ENCODE_BATCH,
+                    show_progress_bar=False,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,   # L2-normalise → inner product = cosine sim
+                )
+                embeddings = embeddings.astype(np.float32)
+                # Save to cache for next startup
+                try:
+                    np.savez_compressed(cache_path, embeddings=embeddings)
+                    logger.info("FAISS cache saved to %s", cache_path)
+                except Exception as save_err:
+                    logger.debug("FAISS cache save failed: %s", save_err)
 
             dim = embeddings.shape[1]
             self._index = faiss.IndexFlatIP(dim)
@@ -380,26 +423,115 @@ def match_item(text: str, corpus: dict, threshold: int = cfg.ITEM_MATCH_FUZZY_TH
                 if word in key.split()
             ]
             if candidates:
-                # Pick best by semantic score if available, else first match
-                if _semantic_index._ready and len(candidates) > 1:
-                    best_key, best_id, best_sem = None, None, -1
-                    for key, item_id in candidates:
-                        sem = _semantic_index.score(word, item_id)
-                        if sem > best_sem:
-                            best_key, best_id, best_sem = key, item_id, sem
-                    # Flag for disambiguation — multiple items contain this word
-                    return _build_result(
-                        best_id, best_key, 0.75, corpus, text_clean
-                    )
+                # Deduplicate by item_id to get distinct menu items
+                seen_cand_ids: dict = {}
+                for key, item_id in candidates:
+                    if item_id not in seen_cand_ids:
+                        seen_cand_ids[item_id] = key
+
+                if len(seen_cand_ids) > 1:
+                    # Multiple DISTINCT menu items contain this word (e.g., 4 biryani types)
+                    # → Must always ask user which variant they want
+                    # Pick the best by semantic score (or first if no semantic)
+                    if _semantic_index._ready:
+                        best_key, best_id, best_sem = None, None, -1
+                        for item_id, key in seen_cand_ids.items():
+                            sem = _semantic_index.score(word, item_id)
+                            if sem > best_sem:
+                                best_key, best_id, best_sem = key, item_id, sem
+                    else:
+                        best_id, best_key = next(iter(seen_cand_ids.items()))
+
+                    # Build full alternatives list (all variants)
+                    all_variants = [
+                        {"item_id": iid, "item_name": k, "matched_as": k, "confidence": 0.70}
+                        for iid, k in seen_cand_ids.items()
+                        if iid != best_id
+                    ]
+                    result = _build_result(best_id, best_key, 0.70, corpus, text_clean)
+                    # Force disambiguation — user MUST choose
+                    result["needs_disambiguation"] = True
+                    result["alternatives"] = all_variants
+                    result["variant_query"] = word  # original ambiguous word
+                    return result
                 else:
-                    key, item_id = candidates[0]
-                    conf = 0.80 if len(candidates) == 1 else 0.70
-                    return _build_result(item_id, key, conf, corpus, text_clean)
+                    # Only one distinct item — auto-select confidently
+                    item_id, key = next(iter(seen_cand_ids.items()))
+                    return _build_result(item_id, key, 0.85, corpus, text_clean)
+
+
+        # ── Semantic-only fallback (multilingual / transliterated words) ──
+        # When fuzzy fails entirely, give FAISS a direct shot.
+        # This rescues cases where a transliterated word (e.g. a Gujarati
+        # food term romanized character-by-character) doesn't string-match
+        # any corpus alias but the multilingual sentence-transformer knows
+        # what it means semantically.
+        #
+        # Threshold: 0.75 = confident enough to auto-select;
+        #            0.65–0.75 = return with needs_disambiguation for user confirmation.
+        if _semantic_index._ready and len(text_clean) >= cfg.ITEM_MATCH_MIN_TOKEN_LEN:
+            sem_top = _semantic_index.top_k(text_clean, k=1)
+            if sem_top:
+                best_iid, best_sem_score = sem_top[0]
+                _SEMANTIC_ONLY_ACCEPT = 0.65        # min score to accept at all
+                _SEMANTIC_ONLY_CONFIDENT = 0.75     # above this → auto-select
+                if best_sem_score >= _SEMANTIC_ONLY_ACCEPT:
+                    best_alias = next((k for k, v in corpus.items() if v == best_iid), text_clean)
+                    # Scale: 0.65 → 0.70 final, 1.0 → 0.95 final
+                    final_score = 0.70 + (best_sem_score - _SEMANTIC_ONLY_ACCEPT) * (0.25 / 0.35)
+                    final_score = min(final_score, 0.95)
+                    logger.debug(
+                        "Semantic-only fallback: '%s' → '%s' (sem=%.2f, final=%.2f)",
+                        text_clean, best_alias, best_sem_score, final_score,
+                    )
+                    return _build_result(best_iid, best_alias, final_score, corpus, text_clean)
+
         return None
 
     matched_fuzzy_key, fuzzy_raw, _ = fuzzy_result
     fuzzy_norm = fuzzy_raw / 100.0
     item_id = corpus[matched_fuzzy_key]
+
+    # --- Variant interception (single-word multi-match check) ---
+    # If the user said a single generic word (e.g. "biryani") that exists as a
+    # component word in 2+ DISTINCT menu items, we must ask which one they want —
+    # even if fuzzy matched one of them with high confidence.
+    # This fires BEFORE the hybnd score return so the fuzzy "win" never silently
+    # picks one type when four are available.
+    if len(tokens) == 1:
+        word = tokens[0]
+        # Find every corpus entry where our word is a whole-word component
+        seen_variant_ids: dict = {}   # item_id → canonical key
+        for key, iid in corpus.items():
+            if word in key.split():
+                if iid not in seen_variant_ids:
+                    seen_variant_ids[iid] = key
+        if len(seen_variant_ids) > 1:
+            # Multiple distinct items share this word → must disambiguate
+            # Pick the best by semantic (or first if semantic not ready)
+            if _semantic_index._ready:
+                best_key, best_id, best_sem = None, None, -1.0
+                for iid, key in seen_variant_ids.items():
+                    sem = _semantic_index.score(word, iid)
+                    if sem > best_sem:
+                        best_key, best_id, best_sem = key, iid, sem
+            else:
+                best_id, best_key = next(iter(seen_variant_ids.items()))
+
+            all_variants = [
+                {"item_id": iid, "item_name": k, "matched_as": k, "confidence": 0.70}
+                for iid, k in seen_variant_ids.items()
+                if iid != best_id
+            ]
+            result = _build_result(best_id, best_key, 0.70, corpus, text_clean)
+            result["needs_disambiguation"] = True
+            result["alternatives"] = all_variants
+            result["variant_query"] = word
+            logger.debug(
+                "Variant disambiguation: '%s' matches %d distinct items → asking user",
+                word, len(seen_variant_ids),
+            )
+            return result
 
     # --- Step 2: Semantic score for the SAME item fuzzy matched ---
     if _semantic_index._ready:
@@ -537,7 +669,10 @@ def extract_all_items(text: str, corpus: dict) -> list:
                 continue
 
             match = match_item(phrase, corpus)
-            if match and match["confidence"] >= min_confidence:
+            # Accept the match if it meets the confidence threshold OR
+            # if it has needs_disambiguation=True (variant detection — the match
+            # is real, user just needs to pick which variant).
+            if match and (match["confidence"] >= min_confidence or match.get("needs_disambiguation")):
                 item_id = match["item_id"]
                 if item_id not in found or match["confidence"] > found[item_id]["confidence"]:
                     found[item_id] = {**match, "position": i, "_window": window_size}
