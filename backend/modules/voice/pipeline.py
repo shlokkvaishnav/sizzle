@@ -247,83 +247,89 @@ class VoicePipeline:
                 )
 
                 if router_result and router_result.get("intent") != "UNKNOWN":
-                    primary_intent = router_result["intent"]
-                    matched_pattern = f"llm_router:{primary_intent.lower()}"
-                    intent_results = [{
-                        "intent": primary_intent,
-                        "matched_pattern": matched_pattern,
-                        "clause": normalized,
-                        "clause_index": 0,
-                    }]
-                    is_compound = False
+                    # Safeguard: when resolving disambiguation, never allow CANCEL (would wipe cart)
+                    r_intent = router_result["intent"]
+                    r_items = router_result.get("items", [])
+                    if pending_disambig and r_intent == "CANCEL" and not r_items:
+                        logger.warning("LLM router returned CANCEL (empty) during disambiguation — ignoring, fallback to regex")
+                    else:
+                        primary_intent = r_intent
+                        matched_pattern = f"llm_router:{primary_intent.lower()}"
+                        intent_results = [{
+                            "intent": primary_intent,
+                            "matched_pattern": matched_pattern,
+                            "clause": normalized,
+                            "clause_index": 0,
+                        }]
+                        is_compound = False
 
-                    # Map router items to DB menu items
-                    name_to_item = {
-                        m.name.lower(): m for m in self.menu_items if m.name
-                    }
-                    for ri in router_result.get("items", []):
-                        name = ri.get("name", "").strip()
-                        qty = ri.get("quantity", 1)
-                        db_item = name_to_item.get(name.lower())
+                        # Map router items to DB menu items
+                        name_to_item = {
+                            m.name.lower(): m for m in self.menu_items if m.name
+                        }
+                        for ri in router_result.get("items", []):
+                            name = ri.get("name", "").strip()
+                            qty = ri.get("quantity", 1)
+                            db_item = name_to_item.get(name.lower())
 
-                        if not db_item:
-                            # Fuzzy: try substring match
-                            for mn_lower, mn_item in name_to_item.items():
-                                if name.lower() in mn_lower or mn_lower in name.lower():
-                                    db_item = mn_item
-                                    break
+                            if not db_item:
+                                # Fuzzy: try substring match
+                                for mn_lower, mn_item in name_to_item.items():
+                                    if name.lower() in mn_lower or mn_lower in name.lower():
+                                        db_item = mn_item
+                                        break
 
-                        if db_item:
-                            if (restaurant_id is not None
-                                    and getattr(db_item, 'restaurant_id', None) is not None
-                                    and db_item.restaurant_id != restaurant_id):
-                                continue
-                            all_enriched_items.append({
-                                "item_id": db_item.id,
-                                "item_name": db_item.name,
-                                "quantity": qty,
-                                "unit_price": db_item.selling_price,
-                                "line_total": qty * db_item.selling_price,
-                                "modifiers": {},
-                                "confidence": 0.95,
-                                "needs_disambiguation": False,
-                                "alternatives": [],
-                                "clause_intent": primary_intent,
-                                "clause": normalized,
-                                "source": "llm_router",
-                                "is_veg": getattr(db_item, 'is_veg', None),
-                            })
+                            if db_item:
+                                if (restaurant_id is not None
+                                        and getattr(db_item, 'restaurant_id', None) is not None
+                                        and db_item.restaurant_id != restaurant_id):
+                                    continue
+                                all_enriched_items.append({
+                                    "item_id": db_item.id,
+                                    "item_name": db_item.name,
+                                    "quantity": qty,
+                                    "unit_price": db_item.selling_price,
+                                    "line_total": qty * db_item.selling_price,
+                                    "modifiers": {},
+                                    "confidence": 0.95,
+                                    "needs_disambiguation": False,
+                                    "alternatives": [],
+                                    "clause_intent": primary_intent,
+                                    "clause": normalized,
+                                    "source": "llm_router",
+                                    "is_veg": getattr(db_item, 'is_veg', None),
+                                })
 
-                    # MODIFY intent: extract modify text from router
-                    if primary_intent == "MODIFY" and router_result.get("items"):
-                        for ri in router_result["items"]:
-                            modify_text = ri.get("modify", "")
-                            if modify_text:
-                                user_messages.append(f"Noted: {modify_text}")
+                        # MODIFY intent: extract modify text from router
+                        if primary_intent == "MODIFY" and router_result.get("items"):
+                            for ri in router_result["items"]:
+                                modify_text = ri.get("modify", "")
+                                if modify_text:
+                                    user_messages.append(f"Noted: {modify_text}")
 
-                    # QUERY intent: use the LLM's answer directly
-                    if primary_intent == "QUERY" and router_result.get("query_answer"):
-                        user_messages.append(router_result["query_answer"])
-                        # Store for response generator
-                        _query_answer = router_result["query_answer"]
+                        # QUERY intent: use the LLM's answer directly
+                        if primary_intent == "QUERY" and router_result.get("query_answer"):
+                            user_messages.append(router_result["query_answer"])
+                            # Store for response generator
+                            _query_answer = router_result["query_answer"]
 
-                    intent_actions.append({
-                        "intent": primary_intent,
-                        "items": list(all_enriched_items),
-                        "modifier_updates": [],
-                    })
+                        intent_actions.append({
+                            "intent": primary_intent,
+                            "items": list(all_enriched_items),
+                            "modifier_updates": [],
+                        })
 
-                    _used_llm_router = True
-                    logger.info(
-                        "LLM Router handled: intent=%s, items=%d, query=%s",
-                        primary_intent,
-                        len(all_enriched_items),
-                        bool(router_result.get("query_answer")),
-                    )
+                        _used_llm_router = True
+                        logger.info(
+                            "LLM Router handled: intent=%s, items=%d, query=%s",
+                            primary_intent,
+                            len(all_enriched_items),
+                            bool(router_result.get("query_answer")),
+                        )
 
-                    # Clear pending disambiguation since router handled this turn
-                    if session_id and pending_disambig:
-                        clear_pending_disambiguation(session_id)
+                        # Clear pending disambiguation since router handled this turn
+                        if session_id and pending_disambig:
+                            clear_pending_disambiguation(session_id)
 
             except Exception as e:
                 logger.warning("LLM Router failed, falling back to regex: %s", e)
